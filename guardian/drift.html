@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Guardian — Drift Detection</title>
+<style>
+  :root { --bg:#0b0e14; --card:#141926; --line:#232b3d; --txt:#e6e9f0; --dim:#8b94a7;
+          --ok:#2dd4a7; --warn:#f5b23e; --bad:#f4587a; --info:#5aa7ff; --purple:#b58aff; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--txt); font:14px/1.45 ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif; padding:20px; }
+  a { color:var(--info); text-decoration:none; }
+  h1 { font-size:19px; letter-spacing:.3px; } h1 .shield { color:var(--ok); }
+  .sub { color:var(--dim); font-size:12px; margin:2px 0 16px; }
+  .nav { display:flex; gap:6px; margin:0 0 16px; }
+  .nav a { color:var(--dim); text-decoration:none; font-size:12px; font-weight:600; padding:6px 14px;
+           border:1px solid var(--line); border-radius:8px; letter-spacing:.3px; }
+  .nav a:hover { border-color:var(--info); color:var(--txt); }
+  .nav a.active { background:var(--card); color:var(--txt); border-color:var(--info); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:1.2px; color:var(--dim); margin-bottom:4px; }
+  .card .hint { color:var(--dim); font-size:11px; margin-bottom:10px; }
+  #kpis { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 16px; flex:1; min-width:130px; }
+  .kpi .v { font-size:22px; font-weight:700; } .kpi .l { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:1px; }
+  .mono { font:12px ui-monospace,Menlo,monospace; }
+  .row { border-top:1px solid var(--line); }
+  .rowhead { display:grid; grid-template-columns: 1.4fr 70px 1.3fr 90px 1.9fr; gap:8px; align-items:center;
+             padding:9px 6px; cursor:pointer; }
+  .rowhead:hover { background:#181f30; }
+  .rowhead .ent { font:12.5px ui-monospace,Menlo,monospace; }
+  .pill { display:inline-block; padding:1px 9px; border-radius:20px; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; }
+  .dbar { height:8px; background:var(--line); border-radius:4px; overflow:hidden; }
+  .dbar i { display:block; height:100%; }
+  .sig { color:var(--dim); font-size:12px; }
+  .detail { padding:4px 10px 12px 10px; background:#0f1420; display:none; }
+  .detail.open { display:block; }
+  .feat { display:grid; grid-template-columns: 1.2fr 1.6fr 120px; gap:10px; align-items:center; padding:5px 0; border-bottom:1px dashed #1a2133; font-size:12.5px; }
+  .feat .fl { color:var(--dim); }
+  .feat .fv { font:12px ui-monospace,monospace; }
+  .feat .fd { height:6px; background:var(--line); border-radius:3px; overflow:hidden; }
+  .feat .fd i { display:block; height:100%; }
+  .chip { display:inline-block; padding:0 6px; border-radius:4px; font-size:10.5px; background:#182034; margin:1px 2px; }
+  .muted { color:var(--dim); }
+  .arrow { color:var(--dim); }
+  .head5 { display:grid; grid-template-columns: 1.4fr 70px 1.3fr 90px 1.9fr; gap:8px; padding:2px 6px 6px;
+           font-size:10.5px; text-transform:uppercase; letter-spacing:.7px; color:var(--dim); }
+</style>
+</head>
+<body>
+<h1><span class="shield">⬡</span> Guardian <span style="color:var(--dim);font-weight:400">— drift detection</span></h1>
+<div class="sub">baseline vs recent behaviour · Jensen–Shannon divergence + standardized shift · no rules, just distributions</div>
+
+<div class="nav">
+  <a href="/">⬡ Fleet</a>
+  <a href="/runtime">⧉ Runtime subagents</a>
+  <a class="active" href="/drift">📈 Drift</a>
+</div>
+
+<div id="kpis"></div>
+
+<div class="card">
+  <h2>Model drift</h2>
+  <div class="hint">Is the LLM behind these calls behaving differently than it used to? (tokens, cost, output length, out/in ratio) — the "provider silently changed the model" signal.</div>
+  <div class="head5"><span>model</span><span>calls</span><span>drift</span><span>status</span><span>top signal</span></div>
+  <div id="models"><p class="muted" style="padding:8px">no model calls yet</p></div>
+</div>
+
+<div class="card">
+  <h2>Agent drift</h2>
+  <div class="hint">Is an agent behaving differently than its own past? (action mix, tool mix, cost/step, tokens/step, output novelty, judged goal-drift)</div>
+  <div class="head5"><span>agent</span><span>events</span><span>drift</span><span>status</span><span>top signal</span></div>
+  <div id="agents"><p class="muted" style="padding:8px">no agents yet</p></div>
+</div>
+
+<div class="card">
+  <h2>Method</h2>
+  <div class="hint">Each entity's history is split into an earlier <b>baseline</b> window and a <b>recent</b> window. Categorical features (action / tool / model mix) are compared with <b>Jensen–Shannon divergence</b>; numeric features with a <b>standardized mean shift</b> blended with % change. A blended score (0–1) grades <span style="color:var(--ok)">stable</span> → <span style="color:var(--info)">low</span> → <span style="color:var(--warn)">moderate</span> → <span style="color:var(--bad)">high</span>. Read-only over the same event stream the live detectors use — this is the slow, distributional question they don't ask.</div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => (s==null?'':s.toString()).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const open = new Set();   // remember expanded rows across refreshes
+
+function dcolor(s){ return s>=0.7?'#f4587a':s>=0.4?'#f5b23e':s>=0.15?'#5aa7ff':'#2dd4a7'; }
+function fmtNum(v){ if(v==null) return '—'; const a=Math.abs(v);
+  if(a!==0 && a<0.01) return v.toFixed(4); if(a<10) return (+v).toFixed(2); return Math.round(v).toLocaleString(); }
+
+async function load(){
+  let d; try{ d = await (await fetch('/v1/drift')).json(); }catch(e){ return; }
+  renderKPIs(d.summary||{});
+  renderRows('models', d.models||[], false);
+  renderRows('agents', d.agents||[], true);
+}
+
+function renderKPIs(s){
+  $('kpis').innerHTML = `
+    <div class="kpi"><div class="v">${s.agents_monitored||0}</div><div class="l">agents monitored</div></div>
+    <div class="kpi"><div class="v">${s.models_monitored||0}</div><div class="l">models monitored</div></div>
+    <div class="kpi"><div class="v" style="color:${(s.agents_drifting+s.models_drifting)?'var(--bad)':'var(--txt)'}">${(s.agents_drifting||0)+(s.models_drifting||0)}</div><div class="l">entities drifting</div></div>
+    <div class="kpi"><div class="v" style="color:${dcolor(s.max_drift||0)}">${((s.max_drift||0)*100).toFixed(0)}%</div><div class="l">max drift${s.top?` · ${esc(s.top)}`:''}</div></div>`;
+}
+
+function renderRows(where, rows, isAgent){
+  const box = $(where);
+  if(!rows.length){ box.innerHTML = `<p class="muted" style="padding:8px">nothing yet</p>`; return; }
+  box.innerHTML = rows.map((r,i)=>{
+    const key = where+':'+r.entity;
+    const insuff = r.status==='insufficient';
+    const pct = (r.score*100).toFixed(0);
+    const col = r.color || dcolor(r.score);
+    const ent = isAgent
+      ? `<a class="ent" href="/agent?agent_id=${encodeURIComponent(r.entity)}">${esc(r.entity)}</a>`
+      : `<span class="ent">${esc(r.entity)}</span>`;
+    const bar = insuff ? `<span class="muted" style="font-size:11px">—</span>`
+      : `<div class="dbar"><i style="width:${Math.max(3,r.score*100)}%;background:${col}"></i></div>`;
+    const status = `<span class="pill" style="background:${col}22;color:${col}">${esc(r.status)}</span>`;
+    const detail = insuff ? '' : renderDetail(r);
+    const isOpen = open.has(key);
+    return `<div class="row">
+      <div class="rowhead" data-k="${esc(key)}">
+        ${ent}
+        <span class="mono muted">${r.events}</span>
+        <span>${bar}</span>
+        ${status}
+        <span class="sig">${insuff?'not enough history':esc(r.top_signal)}</span>
+      </div>
+      <div class="detail ${isOpen?'open':''}" id="d-${esc(key)}">${detail}</div>
+    </div>`;
+  }).join('');
+  box.querySelectorAll('.rowhead').forEach(h=>{
+    h.onclick = ()=>{
+      const k=h.getAttribute('data-k'); const el=$('d-'+k);
+      if(!el) return;
+      const nowOpen = el.classList.toggle('open');
+      if(nowOpen) open.add(k); else open.delete(k);
+    };
+  });
+}
+
+function renderDetail(r){
+  const rows = (r.features||[]).map(f=>{
+    const col = dcolor(f.drift);
+    let mid;
+    if(f.categorical){
+      const chips = d => Object.entries(d).filter(([,v])=>v>0)
+        .map(([k,v])=>`<span class="chip">${esc(k.replace('_call',''))} ${(v*100).toFixed(0)}%</span>`).join('');
+      mid = `<div class="fv"><div class="muted" style="font-size:10.5px">baseline</div>${chips(f.base_dist)}
+             <div class="muted" style="font-size:10.5px;margin-top:3px">recent</div>${chips(f.recent_dist)}</div>`;
+    } else {
+      const unit = f.unit==='$'?'$':'';
+      const suf = f.unit && !['$','x','rate','score'].includes(f.unit) ? ' '+f.unit : (f.unit==='x'?'x':'');
+      const chg = (f.pct==null)
+        ? `Δ${f.delta>=0?'+':''}${fmtNum(f.delta)}`
+        : `${f.pct>=0?'+':''}${f.pct.toFixed(0)}%`;
+      mid = `<div class="fv">${unit}${fmtNum(f.base)}${suf} <span class="arrow">→</span> ${unit}${fmtNum(f.recent)}${suf}
+             <span style="color:${col}">(${chg})</span></div>`;
+    }
+    return `<div class="feat">
+      <div class="fl">${esc(f.feature)}${f.categorical?' <span class="muted" style="font-size:10px">(JS div)</span>':''}</div>
+      ${mid}
+      <div><div class="fd"><i style="width:${Math.max(3,f.drift*100)}%;background:${col}"></i></div>
+        <div class="mono" style="font-size:10px;color:${col};text-align:right">${(f.drift*100).toFixed(0)}%</div></div>
+    </div>`;
+  }).join('');
+  return `<div style="margin-top:4px"><div class="muted" style="font-size:10.5px;margin-bottom:2px">
+    baseline (${r.base_n}) vs recent (${r.recent_n}) · per-feature drift</div>${rows}</div>`;
+}
+
+load();
+setInterval(load, 4000);
+</script>
+</body>
+</html>
