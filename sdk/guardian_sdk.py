@@ -30,6 +30,7 @@ class GuardianKilled(RuntimeError):
 class Guardian:
     def __init__(self, agent_id: str = "default", goal: str = "",
                  swarm_id: str = "default",
+                 task_id: str | None = None, parent_run_id: str | None = None,
                  base_url: str | None = None, api_key: str | None = None,
                  run_id: str | None = None, fail_open: bool = True,
                  poll_interval: float = 1.5, timeout: float = 3.0):
@@ -39,12 +40,32 @@ class Guardian:
         self.swarm_id = swarm_id
         self.goal = goal
         self.run_id = run_id or uuid.uuid4().hex[:12]
+        # realized-layer trace context. task_id identifies the whole end-to-end
+        # workflow; it is minted once at the entry point and propagated unchanged
+        # to every descendant. parent_run_id links this run to its invoker.
+        self.task_id = task_id or os.environ.get("GUARDIAN_TASK_ID") or self.run_id
+        self.parent_run_id = parent_run_id or os.environ.get("GUARDIAN_PARENT_RUN") or ""
         self.fail_open = fail_open
         self.poll = poll_interval
         # trust_env=False: ignore system proxy vars — Guardian is a local/known
         # control plane; env proxies (SOCKS etc.) must never break enforcement.
         self._c = httpx.Client(timeout=timeout, trust_env=False)
         self._started = False
+
+    # ---------------- context propagation ----------------
+
+    def context(self) -> dict:
+        """Handoff token to pass to any agent this one invokes. The callee builds
+        its Guardian from it — that single hop is the ENTIRE author effort; the
+        realized cross-agent graph is then derived by Guardian. Ride it on
+        whatever transport you already use (HTTP headers, kwargs, message meta)."""
+        return {"task_id": self.task_id, "parent_run_id": self.run_id}
+
+    def child(self, agent_id: str, goal: str = "", **kw) -> "Guardian":
+        """Convenience: construct a child client already wired to this run/task."""
+        return Guardian(agent_id=agent_id, goal=goal, swarm_id=self.swarm_id,
+                        base_url=self.base, api_key=self.key, fail_open=self.fail_open,
+                        poll_interval=self.poll, **self.context(), **kw)
 
     # ---------------- core ----------------
 
@@ -54,7 +75,8 @@ class Guardian:
         """Report one step. Returns control state; blocks on pause; raises on kill."""
         payload = {
             "run_id": self.run_id, "agent_id": self.agent_id,
-            "swarm_id": self.swarm_id, "type": type,
+            "swarm_id": self.swarm_id, "task_id": self.task_id,
+            "parent_run_id": self.parent_run_id, "type": type,
             "name": name, "content": content, "tokens_in": tokens_in,
             "tokens_out": tokens_out, "cost_usd": cost_usd, "qty": qty,
             "meta": meta, "ts": time.time(),
@@ -88,7 +110,8 @@ class Guardian:
     def end(self) -> None:
         try:
             self._post_event({"run_id": self.run_id, "agent_id": self.agent_id,
-                              "swarm_id": self.swarm_id,
+                              "swarm_id": self.swarm_id, "task_id": self.task_id,
+                              "parent_run_id": self.parent_run_id,
                               "type": "run_end", "ts": time.time()})
         except Exception:
             pass

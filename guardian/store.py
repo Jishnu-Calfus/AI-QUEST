@@ -12,7 +12,8 @@ from .models import AgentEvent, AgentProfile, BillingRow, Incident
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
   event_id TEXT PRIMARY KEY, run_id TEXT, agent_id TEXT, type TEXT, name TEXT,
-  content TEXT, tokens_in INT, tokens_out INT, cost_usd REAL, ts REAL, meta TEXT
+  content TEXT, tokens_in INT, tokens_out INT, cost_usd REAL, ts REAL, meta TEXT,
+  task_id TEXT, parent_run_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, ts);
 CREATE TABLE IF NOT EXISTS incidents (
@@ -25,7 +26,7 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 CREATE TABLE IF NOT EXISTS registry (
   agent_id TEXT PRIMARY KEY, swarm_id TEXT, owner TEXT, purpose TEXT,
-  budget_usd REAL, registered_ts REAL
+  budget_usd REAL, registered_ts REAL, cluster TEXT
 );
 CREATE TABLE IF NOT EXISTS billing (
   id INTEGER PRIMARY KEY AUTOINCREMENT, swarm_id TEXT, category TEXT,
@@ -33,11 +34,26 @@ CREATE TABLE IF NOT EXISTS billing (
 );
 """
 
+# columns added after v0.2 — ALTER for databases created before sub-clusters.
+# The task index comes LAST, after task_id exists (fresh or migrated).
+_MIGRATIONS = [
+    "ALTER TABLE events ADD COLUMN task_id TEXT",
+    "ALTER TABLE events ADD COLUMN parent_run_id TEXT",
+    "ALTER TABLE registry ADD COLUMN cluster TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id, ts)",
+]
+
 
 class Store:
     def __init__(self, path: str = "guardian.db"):
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.executescript(_SCHEMA)
+        for stmt in _MIGRATIONS:
+            try:
+                self._conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass  # column already exists
+        self._conn.commit()
         self._lock = threading.Lock()
 
     def save_event(self, ev: AgentEvent) -> bool:
@@ -45,10 +61,12 @@ class Store:
         with self._lock:
             try:
                 self._conn.execute(
-                    "INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO events (event_id, run_id, agent_id, type, name,"
+                    " content, tokens_in, tokens_out, cost_usd, ts, meta, task_id,"
+                    " parent_run_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (ev.event_id, ev.run_id, ev.agent_id, ev.type.value, ev.name,
                      ev.content, ev.tokens_in, ev.tokens_out, ev.cost_usd, ev.ts,
-                     json.dumps(ev.meta)),
+                     json.dumps(ev.meta), ev.task_id, ev.parent_run_id),
                 )
                 self._conn.commit()
                 return True
@@ -116,28 +134,33 @@ class Store:
     def register_agent(self, p: AgentProfile) -> None:
         with self._lock:
             self._conn.execute(
-                "INSERT OR REPLACE INTO registry VALUES (?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO registry (agent_id, swarm_id, owner,"
+                " purpose, budget_usd, registered_ts, cluster)"
+                " VALUES (?,?,?,?,?,?,?)",
                 (p.agent_id, p.swarm_id, p.owner, p.purpose, p.budget_usd,
-                 p.registered_ts))
+                 p.registered_ts, p.cluster))
             self._conn.commit()
 
     def list_agents(self) -> list[dict]:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT agent_id, swarm_id, owner, purpose, budget_usd,"
-                " registered_ts FROM registry ORDER BY swarm_id, agent_id").fetchall()
+                " registered_ts, cluster FROM registry"
+                " ORDER BY swarm_id, cluster, agent_id").fetchall()
         return [dict(agent_id=r[0], swarm_id=r[1], owner=r[2], purpose=r[3],
-                     budget_usd=r[4], registered_ts=r[5]) for r in rows]
+                     budget_usd=r[4], registered_ts=r[5], cluster=r[6] or "")
+                for r in rows]
 
     def get_agent(self, agent_id: str) -> dict | None:
         with self._lock:
             r = self._conn.execute(
                 "SELECT agent_id, swarm_id, owner, purpose, budget_usd,"
-                " registered_ts FROM registry WHERE agent_id=?", (agent_id,)).fetchone()
+                " registered_ts, cluster FROM registry WHERE agent_id=?",
+                (agent_id,)).fetchone()
         if not r:
             return None
         return dict(agent_id=r[0], swarm_id=r[1], owner=r[2], purpose=r[3],
-                    budget_usd=r[4], registered_ts=r[5])
+                    budget_usd=r[4], registered_ts=r[5], cluster=r[6] or "")
 
     # ---- billing true-up (lane 2) ----
 

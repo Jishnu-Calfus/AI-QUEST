@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Guardian — Cluster Analysis</title>
+<style>
+  :root { --bg:#0b0e14; --card:#141926; --line:#232b3d; --txt:#e6e9f0; --dim:#8b94a7;
+          --ok:#2dd4a7; --warn:#f5b23e; --bad:#f4587a; --info:#5aa7ff; --purple:#b58aff; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--txt); font:14px/1.45 ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif; padding:20px; }
+  a { color:var(--info); text-decoration:none; } a:hover { text-decoration:underline; }
+  .top { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  h1 { font-size:20px; letter-spacing:.3px; } h1 .shield { color:var(--ok); }
+  .mono { font:12px ui-monospace,Menlo,monospace; }
+  .sub { color:var(--dim); font-size:12px; margin:3px 0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:1.2px; color:var(--dim); margin-bottom:10px; }
+  .grid { display:grid; grid-template-columns: 1.35fr .85fr; gap:14px; align-items:start; }
+  @media (max-width:1050px){ .grid{ grid-template-columns:1fr; } }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.8px; padding:4px 8px; }
+  td { padding:6px 8px; border-top:1px solid var(--line); font-size:13px; vertical-align:top; }
+  .pill { display:inline-block; padding:1px 10px; border-radius:20px; font-size:11px; font-weight:600; }
+  .running{background:#12351f;color:var(--ok)} .idle{background:#1c2333;color:var(--dim)}
+  .paused,.warned{background:#3a2d10;color:var(--warn)} .escalated,.killed{background:#3d1420;color:var(--bad)}
+  .finished{background:#1c2333;color:var(--dim)}
+  #kpis { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 16px; flex:1; min-width:110px; }
+  .kpi .v { font-size:21px; font-weight:700; } .kpi .l { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:1px; }
+  .cost { color:var(--warn); }
+  .diag { border:1px solid var(--line); border-left:4px solid var(--info); border-radius:0 10px 10px 0; background:#101827; padding:13px 15px; margin-bottom:14px; }
+  .diag.bad { border-left-color:var(--bad); background:#1a1220; }
+  .diag p { color:#cdd3e0; font-size:13px; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:3px 12px; font-size:12.5px; }
+  .kv .k { color:var(--dim); } .kv .v2 { text-align:right; }
+  .bar { height:9px; background:var(--line); border-radius:4px; overflow:hidden; margin:6px 0; display:flex; }
+  .bar i { display:block; height:100%; }
+  .catchip,.clchip { display:inline-block; padding:0 6px; border-radius:4px; font-size:10.5px; font-weight:700; }
+  .chip { display:inline-block; padding:0 7px; border-radius:5px; font-size:10.5px; font-weight:600; background:#182034; }
+  .tag { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:1px; }
+  .tag.kill,.tag.escalate{color:var(--bad)} .tag.pause,.tag.warn{color:var(--warn)}
+  .inc { border-left:3px solid var(--bad); padding:8px 10px; margin-bottom:8px; background:#181f30; border-radius:0 8px 8px 0; }
+  .inc.warn { border-left-color:var(--warn); } .inc b{font-size:13px} .inc p{color:var(--dim);font-size:12px;margin-top:3px}
+  .graphwrap { overflow-x:auto; border:1px solid var(--line); border-radius:8px; background:#0d1220; }
+  .glegend { font-size:11px; color:var(--dim); margin-top:8px; display:flex; gap:14px; flex-wrap:wrap; }
+  .live { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--dim); }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--ok); }
+  .muted { color:var(--dim); }
+</style>
+</head>
+<body>
+<div class="top">
+  <a href="/" title="back to fleet dashboard">← fleet</a>
+  <h1><span class="shield">⬡</span> cluster <span id="cl-name" class="mono">…</span></h1>
+  <span id="badge" class="pill idle">…</span>
+  <span class="live" style="margin-left:auto"><span id="dot" class="dot"></span><span id="upd">connecting…</span></span>
+</div>
+<div class="sub" id="meta">a sub-cluster — agents grouped by use case — with its own cost, governance &amp; topology role</div>
+
+<div id="kpis"></div>
+<div id="diag"></div>
+
+<div class="grid">
+  <div>
+    <div class="card"><h2>Member agents <span class="muted" style="text-transform:none;letter-spacing:0">— the agents doing this use case</span></h2><div id="members"></div></div>
+    <div class="card">
+      <h2>Cluster topology <span class="muted" style="text-transform:none;letter-spacing:0">— who invokes this cluster, whom it invokes; denied edges in red</span></h2>
+      <div class="graphwrap"><div id="graph" style="padding:6px"></div></div>
+      <div class="glegend" id="glegend"></div>
+    </div>
+    <div class="card"><h2>Tasks this cluster participated in</h2><div id="tasks"></div></div>
+  </div>
+  <div>
+    <div class="card"><h2>Cost breakdown — full stack</h2><div id="cost"></div></div>
+    <div class="card"><h2>Governance — cluster policy &amp; topology role</h2><div id="gov"></div></div>
+    <div class="card"><h2>Incidents</h2><div id="incidents"><p class="muted">none</p></div></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => (s==null?'':s.toString()).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const qs = new URLSearchParams(location.search);
+const swarm = qs.get('swarm')||'default', cluster = qs.get('cluster')||'';
+const CAT = {llm:'#5aa7ff', api:'#2dd4a7', db:'#f5b23e', compute:'#b58aff', storage:'#f4587a', other:'#8b94a7'};
+const CLC = {ingestion:'#5aa7ff', extraction:'#2dd4a7', validation:'#b58aff', payments:'#f4587a', reporting:'#f5b23e', '(unassigned)':'#8b94a7'};
+const cColor = c => CLC[c] || '#7c8bb0';
+const fmtCost = v => '$'+(v||0).toFixed(v>=1?2:4);
+document.title = 'Guardian — cluster ' + cluster;
+
+async function load(){
+  let d;
+  try { d = await (await fetch(`/v1/clusters/${encodeURIComponent(swarm)}/${encodeURIComponent(cluster)}/analysis`)).json(); }
+  catch(e){ $('upd').textContent='fetch error'; return; }
+  if(d.detail){ $('meta').textContent='unknown cluster'; return; }
+  render(d);
+  $('upd').textContent = 'updated ' + new Date().toLocaleTimeString();
+}
+
+function render(d){
+  $('cl-name').textContent = d.cluster;
+  const bad = (d.violations||[]).length>0;
+  const b=$('badge'); b.className='pill '+(bad?'escalated':'running'); b.textContent = bad?`${d.violations.length} violation(s)`:'healthy';
+  $('meta').innerHTML = `swarm <span class="mono">${esc(d.swarm_id)}</span> · ${d.summary.agent_count} agents · ${d.task_count} tasks`;
+  renderKPIs(d); renderDiag(d, bad); renderMembers(d.members||[]);
+  renderGraph(d.graph||{nodes:[],edges:[]}); renderTasks(d.tasks||[]);
+  renderCost(d.summary||{}); renderGov(d); renderIncidents(d.incidents||[]);
+}
+
+function renderKPIs(s){
+  const su=s.summary;
+  $('kpis').innerHTML = `
+    <div class="kpi"><div class="v cost">${fmtCost(su.cost_usd)}</div><div class="l">cluster cost</div></div>
+    <div class="kpi"><div class="v">${su.agent_count}</div><div class="l">agents</div></div>
+    <div class="kpi"><div class="v">${su.runs}</div><div class="l">runs</div></div>
+    <div class="kpi"><div class="v">${(su.tokens||0).toLocaleString()}</div><div class="l">tokens</div></div>
+    <div class="kpi"><div class="v">${s.task_count}</div><div class="l">tasks touched</div></div>
+    <div class="kpi"><div class="v" style="color:${(s.violations||[]).length?'var(--bad)':'var(--txt)'}">${(s.violations||[]).length}</div><div class="l">topology violations</div></div>`;
+}
+
+function renderDiag(d, bad){
+  $('diag').innerHTML = `<div class="diag ${bad?'bad':''}">
+    <h3 style="font-size:14px;margin-bottom:5px">${bad?'⚠ Cluster governance':'🩺 Cluster health'}</h3>
+    <p>${esc(d.diagnosis||'')}</p></div>`;
+}
+
+function renderMembers(mem){
+  if(!mem.length){ $('members').innerHTML='<p class="muted">no agents assigned to this cluster</p>'; return; }
+  $('members').innerHTML = `<table><thead><tr><th>agent</th><th>owner</th><th>purpose</th><th>cost</th><th>runs</th><th>waste</th></tr></thead><tbody>`
+    + mem.map(a=>{
+      const w = a.waste_score>0.15?`<span class="tag kill">${(a.waste_score*100).toFixed(0)}%</span>`:`<span class="muted">${(a.waste_score*100).toFixed(0)}%</span>`;
+      return `<tr>
+        <td class="mono"><a href="/agent?agent_id=${encodeURIComponent(a.agent_id)}">${esc(a.agent_id)}</a> <span class="pill ${a.state}">${a.state}</span></td>
+        <td>${esc(a.owner||'—')}</td>
+        <td class="muted" style="max-width:200px">${esc((a.purpose||'—').slice(0,60))}</td>
+        <td class="mono cost">${fmtCost(a.cost_usd)}</td>
+        <td class="mono">${a.runs}</td><td>${w}</td></tr>`;
+    }).join('') + `</tbody></table>
+    <p class="muted" style="font-size:11px;margin-top:6px">waste = cost share − contribution share within this cluster · click an agent for its full trace</p>`;
+}
+
+function renderCost(su){
+  const cats = Object.entries(su.cost_by_cat||{}).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+  const total = su.cost_usd||0;
+  if(!cats.length){ $('cost').innerHTML='<p class="muted">no cost recorded</p>'; return; }
+  const segs = cats.map(([c,v])=>`<i title="${c}: ${fmtCost(v)}" style="width:${Math.max(2,v/(total||1)*100)}%;background:${CAT[c]||'#888'}"></i>`).join('');
+  const rows = cats.map(([c,v])=>`<tr><td><span class="catchip" style="background:${CAT[c]||'#888'};color:#0b0e14">${c}</span></td>
+     <td class="mono cost">${fmtCost(v)}</td><td class="muted mono">${(v/(total||1)*100).toFixed(0)}%</td></tr>`).join('');
+  $('cost').innerHTML = `<div class="mono cost" style="font-size:16px">${fmtCost(total)}</div><div class="bar">${segs}</div><table>${rows}</table>`;
+}
+
+function renderGov(d){
+  const p=d.policy||{}, t=d.topology||{};
+  const allow = p.allowed_tools ? p.allowed_tools.map(x=>`<span class="chip">${esc(x)}</span>`).join(' ') : '<span class="muted">all allowed</span>';
+  const denied = (p.denied_tools&&p.denied_tools.length)? p.denied_tools.map(x=>`<span class="chip" style="color:var(--bad)">${esc(x)}</span>`).join(' ') : '<span class="muted">none</span>';
+  const dedges = (t.denied_edges&&t.denied_edges.length)? t.denied_edges.map(e=>`<span class="chip" style="color:var(--bad)">${esc(e.from)} ⇸ ${esc(e.to)}</span>`).join(' ') : '<span class="muted">none</span>';
+  const reqby = (t.required_by&&t.required_by.length)? t.required_by.map(esc).join(', ') : '—';
+  $('gov').innerHTML = `<div class="kv">
+    <div class="k">budget cap</div><div class="v2 mono cost">${fmtCost(p.max_cost_usd)} → ${esc(p.budget_action)}</div>
+    <div class="k">max tokens</div><div class="v2 mono">${(p.max_tokens||0).toLocaleString()}</div>
+    <div class="k">max steps</div><div class="v2 mono">${p.max_steps}</div>
+    <div class="k">PII blocking</div><div class="v2 mono">${p.pii_block?'on':'off'}</div>
+  </div>
+  <div style="margin-top:8px"><div class="k muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.8px">allowed tools</div><div style="margin-top:3px">${allow}</div></div>
+  <div style="margin-top:8px"><div class="k muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.8px">denied tools</div><div style="margin-top:3px">${denied}</div></div>
+  <div class="kv" style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">
+    <div class="k">requires predecessor</div><div class="v2 mono">${t.requires?esc(t.requires):'—'}</div>
+    <div class="k">required by</div><div class="v2 mono">${reqby}</div>
+  </div>
+  <div style="margin-top:6px"><div class="k muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.8px">denied edges (this cluster)</div><div style="margin-top:3px">${dedges}</div></div>`;
+}
+
+function renderTasks(tasks){
+  if(!tasks.length){ $('tasks').innerHTML='<p class="muted">this cluster has not participated in any task yet</p>'; return; }
+  $('tasks').innerHTML = `<table><thead><tr><th>task</th><th>state</th><th>cost here</th><th>task cost</th></tr></thead><tbody>`
+    + tasks.map(t=>`<tr>
+      <td class="mono"><a href="/task?task_id=${encodeURIComponent(t.task_id)}">${esc(t.task_id)}</a>${t.violation_count?` <span class="tag kill">⚠</span>`:''}</td>
+      <td><span class="pill ${t.state}">${t.state}</span></td>
+      <td class="mono cost">${fmtCost(t.cost_here)}</td><td class="mono muted">${fmtCost(t.cost_usd)}</td></tr>`).join('')
+    + `</tbody></table>`;
+}
+
+function renderIncidents(incs){
+  const box=$('incidents');
+  if(!incs.length){ box.innerHTML='<p class="muted">none — no interventions on this cluster</p>'; return; }
+  box.innerHTML = incs.slice(0,12).map(i=>`<div class="inc ${i.action==='warn'||i.action==='pause'?'warn':''}">
+    <span class="tag ${i.action}">${esc(i.action)}</span> <span class="mono muted">${esc(i.agent_id)}</span>
+    <div><b>${esc(i.title)}</b></div><p>${esc(i.explanation)}</p></div>`).join('');
+}
+
+// ---- cluster-topology graph (row layout, directed arcs, focus highlighted) ----
+function renderGraph(g){
+  const nodes=g.nodes||[], edges=g.edges||[], legend=$('glegend');
+  const gEl=$('graph');
+  if(!nodes.length){ gEl.innerHTML='<p class="muted" style="padding:14px">no cluster topology yet</p>'; legend.innerHTML=''; return; }
+  // order by in-degree ascending (roots first) so pipelines read left→right
+  const indeg={}; nodes.forEach(n=>indeg[n.id]=0);
+  edges.forEach(e=>{ if(indeg[e.to]!=null) indeg[e.to]++; });
+  const ordered=[...nodes].sort((a,b)=>(indeg[a.id]-indeg[b.id]));
+  const idx={}; ordered.forEach((n,i)=>idx[n.id]=i);
+  const NW=140,NH=48,GAP=66,MX=28,midY=110;
+  const W=MX*2+ordered.length*NW+Math.max(0,ordered.length-1)*GAP, H=midY+NH/2+90;
+  const xOf=i=>MX+i*(NW+GAP);
+  const defs=`<defs>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#4d5b7a"/></marker>
+    <marker id="arL" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#f4587a"/></marker></defs>`;
+  let ep='';
+  edges.forEach(e=>{
+    const i=idx[e.from], j=idx[e.to]; if(i==null||j==null) return;
+    const col=e.denied?'#f4587a':'#4d5b7a', mk=e.denied?'arL':'ar', th=e.denied?3:Math.min(5,1.3+Math.log2(e.count+1));
+    let path,lx,ly;
+    if(i===j){ const cx=xOf(i)+NW*0.5, ty=midY-NH/2; path=`M ${cx-16} ${ty} C ${cx-24} ${ty-44}, ${cx+24} ${ty-44}, ${cx+16} ${ty}`; lx=cx; ly=ty-38; }
+    else if(j>i){ const x1=xOf(i)+NW, x2=xOf(j), h=26+(j-i)*20, cy=midY-h; path=`M ${x1} ${midY} C ${x1+(x2-x1)*0.25} ${cy}, ${x1+(x2-x1)*0.75} ${cy}, ${x2} ${midY}`; lx=(x1+x2)/2; ly=cy+3; }
+    else { const x1=xOf(i)+NW*0.5, x2=xOf(j)+NW*0.5, y=midY+NH/2, h=30+(i-j)*22, cy=y+h; path=`M ${x1} ${y} C ${x1} ${cy}, ${x2} ${cy}, ${x2} ${y}`; lx=(x1+x2)/2; ly=cy-4; }
+    ep+=`<path d="${path}" fill="none" stroke="${col}" stroke-width="${th}" marker-end="url(#${mk})" opacity="0.9"/>`;
+    const label=(e.denied?'⛔ ':'')+e.count+'×';
+    ep+=`<rect x="${lx-17}" y="${ly-9}" width="34" height="15" rx="4" fill="#0d1220" stroke="${col}"/>`
+      +`<text x="${lx}" y="${ly+2}" text-anchor="middle" font-size="9.5" fill="${col}" font-family="ui-monospace,monospace">${label}</text>`;
+  });
+  let np='';
+  ordered.forEach((n,i)=>{
+    const x=xOf(i), y=midY-NH/2, col=cColor(n.id), foc=n.focus;
+    np+=`<g>
+      ${foc?`<rect x="${x-3}" y="${y-3}" width="${NW+6}" height="${NH+6}" rx="11" fill="none" stroke="${col}" stroke-width="2" opacity="0.5"/>`:''}
+      <rect x="${x}" y="${y}" width="${NW}" height="${NH}" rx="9" fill="${foc?'#1a2233':'#141926'}" stroke="${col}" stroke-width="${foc?2.2:1.4}"/>
+      <rect x="${x}" y="${y}" width="5" height="${NH}" rx="2" fill="${col}"/>
+      <text x="${x+16}" y="${y+22}" font-size="13" fill="#e6e9f0" font-family="ui-monospace,monospace">${esc(n.id)}</text>
+      <text x="${x+16}" y="${y+38}" font-size="10" fill="${col}" font-family="ui-monospace,monospace">${foc?'▶ this cluster':'cluster'}</text>
+    </g>`;
+  });
+  gEl.innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="max-width:none">${defs}${ep}${np}</svg>`;
+  legend.innerHTML = `<span><b style="color:${cColor(cluster)}">■</b> this cluster (highlighted)</span>`
+    + `<span><b style="color:#f4587a">▬ ⛔</b> denied cluster edge</span>`
+    + `<span class="muted">edge label = observed invocations across tasks</span>`;
+}
+
+// ---- realtime: SSE + poll ----
+let reloadTimer=null;
+function scheduleReload(){ if(reloadTimer) return; reloadTimer=setTimeout(()=>{reloadTimer=null; load();}, 450); }
+function connectSSE(){
+  const es=new EventSource('/v1/stream');
+  es.onopen=()=>{ $('upd').textContent='live'; };
+  es.onmessage=m=>{ let msg; try{ msg=JSON.parse(m.data);}catch(e){return;}
+    const d=msg.data||{};
+    if(d.swarm_id===swarm || msg.kind==='task' || msg.kind==='registry'){ scheduleReload(); } };
+  es.onerror=()=>{ $('upd').textContent='reconnecting…'; };
+}
+load(); connectSSE(); setInterval(load, 3000);
+</script>
+</body>
+</html>

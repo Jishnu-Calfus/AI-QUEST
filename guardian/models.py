@@ -42,6 +42,9 @@ class AgentEvent(BaseModel):
     run_id: str
     agent_id: str = "default"
     swarm_id: str = "default"
+    # --- realized-layer trace context (sub-cluster governance) ---
+    task_id: Optional[str] = None       # end-to-end workflow instance; propagated
+    parent_run_id: Optional[str] = None # the run that invoked this run (edge)
     goal: Optional[str] = None          # send once on run_start
     type: EventType = EventType.tool_call
     name: Optional[str] = None          # tool name / model name / resource kind
@@ -94,6 +97,9 @@ class RunStatus(BaseModel):
     run_id: str
     agent_id: str
     swarm_id: str = "default"
+    cluster: str = ""                   # declared cluster this agent belongs to
+    task_id: str = ""                   # realized-layer workflow this run is part of
+    parent_run_id: str = ""             # who invoked this run
     goal: Optional[str] = None
     state: ControlState = ControlState.running
     steps: int = 0
@@ -112,10 +118,30 @@ class AgentProfile(BaseModel):
     """Registry entry — 'hire' an agent like an employee."""
     agent_id: str
     swarm_id: str = "default"
+    cluster: str = ""                   # declared sub-cluster (ingestion/extraction/...)
     owner: str = ""
     purpose: str = ""
     budget_usd: float = 0.0             # informational; enforcement lives in policies.yaml
     registered_ts: float = Field(default_factory=time.time)
+
+
+class TaskStatus(BaseModel):
+    """Realized-layer rollup: one end-to-end workflow instance stitched from
+    the event stream — which runs/clusters participated, in what shape, at what
+    cost, and any topology governance events."""
+    task_id: str
+    swarm_id: str = "default"
+    goal: str = ""
+    state: ControlState = ControlState.running
+    runs: list[str] = Field(default_factory=list)              # run_ids (spans)
+    edges: list[dict] = Field(default_factory=list)            # {from,to,from_cluster,to_cluster,denied}
+    clusters: list[str] = Field(default_factory=list)          # realized cluster set, entry order
+    cost_usd: float = 0.0
+    cost_by_cluster: dict[str, float] = Field(default_factory=dict)
+    violations: list[dict] = Field(default_factory=list)       # topology governance events
+    frozen_run: str = ""                                       # run held for a human decision
+    started: float = Field(default_factory=time.time)
+    last_seen: float = Field(default_factory=time.time)
 
 
 class BillingRow(BaseModel):

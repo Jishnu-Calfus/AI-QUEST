@@ -17,6 +17,37 @@ default:
   policy_action: kill       # what to do on policy violation
   drift_action: escalate    # goal drift -> pause + human decision
 
+# --- sub-cluster governance: policies layered default -> swarm -> cluster -> agent ---
+swarms:
+  invoice-swarm:
+    max_cost_usd: 5.00          # swarm-wide default for its agents
+
+    clusters:                   # policy-bearing sub-groups (declared org chart)
+      ingestion:
+        allowed_tools: [fetch_invoice, s3_get, db_query]
+        max_cost_usd: 0.50
+      extraction:
+        allowed_tools: [ocr_page, llm_extract, db_query]
+        max_cost_usd: 1.50
+      validation:
+        allowed_tools: [rules_check, llm_verify, db_query]
+      payments:
+        allowed_tools: [ledger_write, send_wire_transfer, db_query]
+        pii_block: true         # monotonic: cannot be turned off at agent level
+
+    topology:                   # governs the SHAPE of a task across clusters
+      denied_edges:
+        - { from: extraction, to: payments }    # never invoke payments directly
+      required_predecessors:
+        - { cluster: payments, requires: validation }  # must pass validation first
+      max_clusters_per_task: 5
+      max_runs_per_task: 12                      # runaway-orchestrator fan-out cap
+      task_budget_usd: 2.00                      # spans ALL runs in the task
+      on_denied_edge: escalate                   # freeze child + human decision
+      on_missing_predecessor: escalate
+      on_fanout_breach: pause
+      on_task_budget: pause
+
 agents:
   invoice-summarizer:        # trusted, boring, generous limits
     max_cost_usd: 2.00
