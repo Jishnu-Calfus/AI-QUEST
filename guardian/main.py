@@ -106,6 +106,39 @@ async def diagnose(run_id: str):
             **result}
 
 
+# ---------------- realized-layer: tasks + clusters ----------------
+
+@app.get("/v1/tasks")
+async def tasks():
+    """Realized workflow instances stitched from the event stream."""
+    return engine.tasks_summary()
+
+
+@app.get("/v1/tasks/{task_id}")
+async def task_detail(task_id: str):
+    d = engine.task_detail(task_id)
+    if d is None:
+        raise HTTPException(404, "unknown task")
+    return d
+
+
+@app.post("/v1/tasks/{task_id}/action")
+async def human_task_action(task_id: str, body: dict):
+    action = body.get("action", "")
+    if action not in ("pause", "resume", "kill"):
+        raise HTTPException(400, "action must be pause|resume|kill")
+    d = await engine.human_task_action(task_id, action, body.get("who", "operator"))
+    if d is None:
+        raise HTTPException(404, "unknown task")
+    return d
+
+
+@app.get("/v1/clusters")
+async def clusters():
+    """Per-cluster cost + waste rollup (sub-cluster economics)."""
+    return engine.clusters_summary()
+
+
 # ---------------- swarm economics ----------------
 
 @app.get("/v1/swarms")
@@ -148,8 +181,9 @@ async def reconciliation():
 @app.post("/v1/agents/register", dependencies=[Depends(auth)])
 async def register(profile: AgentProfile):
     store.register_agent(profile)
+    engine.set_cluster(profile.agent_id, profile.cluster)   # declared assignment
     store.audit("-", "registry", "agent_registered",
-                f"{profile.agent_id} owner={profile.owner}")
+                f"{profile.agent_id} owner={profile.owner} cluster={profile.cluster or '-'}")
     _notify("registry", profile.model_dump())
     return profile.model_dump()
 
@@ -221,4 +255,11 @@ async def dashboard():
 async def agent_page():
     """Per-agent analysis landing page (reads ?agent_id= client-side)."""
     path = os.path.join(os.path.dirname(__file__), "agent.html")
+    return FileResponse(path)
+
+
+@app.get("/task")
+async def task_page():
+    """Per-task realized-graph page (reads ?task_id= client-side)."""
+    path = os.path.join(os.path.dirname(__file__), "task.html")
     return FileResponse(path)

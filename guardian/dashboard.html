@@ -66,6 +66,7 @@
   <div class="card"><h2>Live event feed</h2><div id="feed"></div></div>
 </div>
 <div>
+  <div class="card"><h2>Tasks — realized workflows <span style="text-transform:none;letter-spacing:0;color:var(--dim)">(one end-to-end request each)</span></h2><div id="tasks"><p style="color:var(--dim)">no tasks yet — run a multi-agent workflow</p></div></div>
   <div class="card"><h2>Swarm economics — true cost</h2><div id="swarms"><p style="color:var(--dim)">no swarms yet</p></div></div>
   <div class="card"><h2>Incidents &amp; interventions</h2><div id="incidents"><p style="color:var(--dim)">none yet — fleet is healthy</p></div></div>
 </div>
@@ -125,7 +126,31 @@ es.onmessage = m=>{
   if(kind==='run'){ runs[data.run_id]=data; renderRuns(); }
   else if(kind==='event'){ addFeed(data); }
   else if(kind==='incident'){ addIncident(data); }
+  else if(kind==='task'){ renderTasks(); }
 };
+
+// ---- tasks panel (realized workflows) ----
+const CLUSTERCOLORS = {ingestion:'#5aa7ff', extraction:'#2dd4a7', validation:'#b58aff',
+  payments:'#f4587a', reporting:'#f5b23e', '(unassigned)':'#8b94a7'};
+const cColor = c => CLUSTERCOLORS[c] || '#7c8bb0';
+async function renderTasks(){
+  try{
+    const tasks = await (await fetch('/v1/tasks')).json();
+    const box = $('tasks');
+    if(!tasks.length){ return; }
+    box.innerHTML = tasks.slice(0,12).map(t=>{
+      const chips = (t.clusters||[]).map(c=>`<span class="pill" style="background:#182034;color:${cColor(c)};padding:0 7px">${esc(c)}</span>`).join(' ');
+      const viol = t.violation_count>0 ? ` <span class="tag kill">⚠ ${t.violation_count} violation${t.violation_count>1?'s':''}</span>` : '';
+      return `<div style="padding:6px 0;border-top:1px solid var(--line)">
+        <a class="alink mono" href="/task?task_id=${encodeURIComponent(t.task_id)}">${esc(t.task_id)}</a>
+        <span class="pill ${t.state}">${t.state}</span>${viol}
+        <span class="mono cost">$${(t.cost_usd||0).toFixed(4)}</span>
+        <span style="color:var(--dim);font-size:11px">· ${t.run_count} runs · ${t.cluster_count} clusters</span>
+        <div style="margin-top:3px">${chips}</div></div>`;
+    }).join('');
+  }catch(e){}
+}
+setInterval(renderTasks, 3000); renderTasks();
 setInterval(async()=>{ // reconcile in case SSE missed anything
   const rs = await (await fetch('/v1/runs')).json();
   rs.forEach(r=>runs[r.run_id]=r); renderRuns();
