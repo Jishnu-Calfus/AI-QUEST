@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Guardian — Agent Watchdog</title>
+<style>
+  :root { --bg:#0b0e14; --card:#141926; --line:#232b3d; --txt:#e6e9f0; --dim:#8b94a7;
+          --ok:#2dd4a7; --warn:#f5b23e; --bad:#f4587a; --info:#5aa7ff; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--txt); font:14px/1.45 ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif; padding:20px; }
+  h1 { font-size:19px; letter-spacing:.3px; }
+  h1 .shield { color:var(--ok); }
+  .sub { color:var(--dim); font-size:12px; margin:2px 0 16px; }
+  .grid { display:grid; grid-template-columns: 1.15fr .85fr; gap:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:1.2px; color:var(--dim); margin-bottom:10px; }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.8px; padding:4px 8px; }
+  td { padding:6px 8px; border-top:1px solid var(--line); font-size:13px; vertical-align:top; }
+  .pill { display:inline-block; padding:1px 9px; border-radius:20px; font-size:11px; font-weight:600; }
+  .running{background:#12351f;color:var(--ok)} .warned{background:#3a2d10;color:var(--warn)}
+  .paused{background:#3a2d10;color:var(--warn)} .escalated{background:#3d1420;color:var(--bad)}
+  .killed{background:#3d1420;color:var(--bad)} .finished{background:#1c2333;color:var(--dim)}
+  .bar { height:5px; background:var(--line); border-radius:3px; overflow:hidden; margin-top:3px; }
+  .bar i { display:block; height:100%; background:var(--info); }
+  button { background:transparent; border:1px solid var(--line); color:var(--txt); border-radius:6px;
+           padding:3px 10px; font-size:12px; cursor:pointer; margin-right:4px; }
+  button:hover { border-color:var(--info); }
+  button.kill:hover { border-color:var(--bad); color:var(--bad); }
+  #incidents .inc { border-left:3px solid var(--bad); padding:8px 10px; margin-bottom:8px; background:#181f30; border-radius:0 8px 8px 0; }
+  #incidents .inc.warn { border-left-color:var(--warn); }
+  .inc b { font-size:13px; } .inc p { color:var(--dim); font-size:12px; margin-top:3px; }
+  .inc .tag { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:1px; }
+  .tag.kill,.tag.escalate{color:var(--bad)} .tag.pause,.tag.warn{color:var(--warn)}
+  #feed { max-height:300px; overflow-y:auto; font:12px ui-monospace,Menlo,monospace; color:var(--dim); }
+  #feed div { padding:2px 0; border-bottom:1px dashed #1a2133; }
+  #feed .en { color:var(--info); }
+  .mono { font:12px ui-monospace,Menlo,monospace; }
+  .cost { color:var(--warn); }
+  #totals { display:flex; gap:22px; margin-bottom:14px; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 18px; flex:1; }
+  .kpi .v { font-size:22px; font-weight:700; } .kpi .l { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:1px; }
+</style>
+</head>
+<body>
+<h1><span class="shield">⬡</span> Guardian <span style="color:var(--dim);font-weight:400">— runtime watchdog for AI agents</span></h1>
+<div class="sub">every agent step inspected · deterministic rules + LLM judge · warn → pause → kill → human</div>
+
+<div id="totals">
+  <div class="kpi"><div class="v" id="k-agents">0</div><div class="l">agents watched</div></div>
+  <div class="kpi"><div class="v" id="k-steps">0</div><div class="l">steps inspected</div></div>
+  <div class="kpi"><div class="v cost" id="k-cost">$0.00</div><div class="l">fleet spend</div></div>
+  <div class="kpi"><div class="v" id="k-inc" style="color:var(--bad)">0</div><div class="l">interventions</div></div>
+</div>
+
+<div class="grid">
+<div>
+  <div class="card">
+    <h2>Watched runs</h2>
+    <table id="runs"><thead><tr>
+      <th>agent</th><th>goal</th><th>state</th><th>steps</th><th>cost / budget</th><th>suspicion</th><th></th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+  <div class="card"><h2>Live event feed</h2><div id="feed"></div></div>
+</div>
+<div>
+  <div class="card"><h2>Swarm economics — true cost</h2><div id="swarms"><p style="color:var(--dim)">no swarms yet</p></div></div>
+  <div class="card"><h2>Incidents &amp; interventions</h2><div id="incidents"><p style="color:var(--dim)">none yet — fleet is healthy</p></div></div>
+</div>
+</div>
+
+<script>
+const runs = {}; let steps = 0, incCount = 0;
+const $ = id => document.getElementById(id);
+const esc = s => (s||'').toString().replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function renderRuns(){
+  const tb = document.querySelector('#runs tbody'); tb.innerHTML='';
+  let cost=0;
+  Object.values(runs).sort((a,b)=>a.agent_id.localeCompare(b.agent_id)).forEach(r=>{
+    cost += r.cost_usd||0;
+    const suspPct = Math.min(100,(r.suspicion||0)/8*100);
+    const tr=document.createElement('tr');
+    tr.innerHTML = `<td class="mono">${esc(r.agent_id)}</td>
+      <td style="max-width:210px;color:var(--dim)">${esc((r.goal||'—').slice(0,80))}</td>
+      <td><span class="pill ${r.state}">${r.state}</span></td>
+      <td>${r.steps}</td>
+      <td class="mono cost">$${(r.cost_usd||0).toFixed(3)}</td>
+      <td style="min-width:90px"><div class="bar"><i style="width:${suspPct}%;background:${suspPct>60?'var(--bad)':suspPct>35?'var(--warn)':'var(--info)'}"></i></div></td>
+      <td>${btn(r)}</td>`;
+    tb.appendChild(tr);
+  });
+  $('k-agents').textContent = Object.keys(runs).length;
+  $('k-cost').textContent = '$'+cost.toFixed(2);
+}
+function btn(r){
+  if(r.state==='killed'||r.state==='finished') return '';
+  if(r.state==='paused'||r.state==='escalated')
+    return `<button onclick="act('${r.run_id}','resume')">resume</button><button class="kill" onclick="act('${r.run_id}','kill')">kill</button>`;
+  return `<button onclick="act('${r.run_id}','pause')">pause</button><button class="kill" onclick="act('${r.run_id}','kill')">kill</button>`;
+}
+async function act(id,a){ await fetch(`/v1/runs/${id}/action`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a,who:'dashboard'})}); }
+
+function addIncident(i){
+  incCount++; $('k-inc').textContent=incCount;
+  const box=$('incidents'); if(box.firstElementChild?.tagName==='P') box.innerHTML='';
+  const d=document.createElement('div');
+  d.className='inc'+((i.action==='warn')?' warn':'');
+  d.innerHTML=`<span class="tag ${i.action}">${i.action}</span> <span class="mono" style="color:var(--dim)">${esc(i.agent_id)}</span>
+    <div><b>${esc(i.title)}</b></div><p>${esc(i.explanation)}</p>`;
+  box.prepend(d);
+}
+function addFeed(e){
+  steps++; $('k-steps').textContent=steps;
+  const f=$('feed'); const d=document.createElement('div');
+  d.innerHTML=`<span class="en">${esc(e.agent_id)}</span> · ${esc(e.type)} <b>${esc(e.name||'')}</b> ${esc((e.content||'').slice(0,90))}`;
+  f.prepend(d); while(f.children.length>120) f.removeChild(f.lastChild);
+}
+
+const es = new EventSource('/v1/stream');
+es.onmessage = m=>{
+  const {kind,data} = JSON.parse(m.data);
+  if(kind==='run'){ runs[data.run_id]=data; renderRuns(); }
+  else if(kind==='event'){ addFeed(data); }
+  else if(kind==='incident'){ addIncident(data); }
+};
+setInterval(async()=>{ // reconcile in case SSE missed anything
+  const rs = await (await fetch('/v1/runs')).json();
+  rs.forEach(r=>runs[r.run_id]=r); renderRuns();
+},5000);
+
+// ---- swarm economics panel ----
+const CATCOLORS = {llm:'#5aa7ff', api:'#2dd4a7', db:'#f5b23e', compute:'#b58aff', storage:'#f4587a', other:'#8b94a7'};
+async function renderSwarms(){
+  try{
+    const [swarms, recon] = await Promise.all([
+      (await fetch('/v1/swarms')).json(),
+      (await fetch('/v1/billing/reconciliation')).json()]);
+    const box = $('swarms');
+    if(!swarms.length){ return; }
+    const reconMap = {}; recon.forEach(r=>reconMap[r.swarm_id]=r);
+    box.innerHTML = swarms.map(s=>{
+      const total = s.total_usd || 0;
+      const segs = Object.entries(s.by_category).filter(([,v])=>v>0)
+        .map(([c,v])=>`<i title="${c}: $${v.toFixed(3)}" style="display:inline-block;height:100%;width:${Math.max(2,v/(total||1)*100)}%;background:${CATCOLORS[c]||'#888'}"></i>`).join('');
+      const legend = Object.entries(s.by_category).filter(([,v])=>v>0)
+        .map(([c,v])=>`<span style="color:${CATCOLORS[c]}">■</span> ${c} $${v.toFixed(3)}`).join(' &nbsp;');
+      const agents = s.agents.slice(0,5).map(a=>{
+        const waste = a.waste_score>0.15?` <span class="tag kill" title="cost share ${(a.cost_share*100).toFixed(0)}%, contribution ${(a.contribution_share*100).toFixed(0)}%">WASTE ${(a.waste_score*100).toFixed(0)}%</span>`:'';
+        return `<tr><td class="mono">${esc(a.agent_id)}</td><td class="mono cost">$${a.cost_usd.toFixed(3)}</td>
+          <td>${(a.cost_share*100).toFixed(0)}% cost / ${(a.contribution_share*100).toFixed(0)}% output${waste}</td></tr>`;
+      }).join('');
+      const rc = reconMap[s.swarm_id];
+      const reconLine = (rc && rc.actual_total>0)
+        ? `<p style="color:var(--dim);font-size:11px;margin-top:5px">billing true-up: metered $${rc.metered_total} vs actual $${rc.actual_total} (cloud bill import)</p>` : '';
+      return `<div style="margin-bottom:14px">
+        <b>${esc(s.swarm_id)}</b> <span class="mono cost" style="font-size:15px">$${total.toFixed(3)}</span>
+        <span style="color:var(--dim);font-size:11px"> · ${s.runs} agents${s.top_waster?` · top waster: <span style="color:var(--bad)">${esc(s.top_waster)}</span>`:''}</span>
+        <div class="bar" style="height:8px;margin:6px 0">${segs}</div>
+        <div style="font-size:11px;color:var(--dim)">${legend}</div>
+        <table style="margin-top:6px">${agents}</table>${reconLine}</div>`;
+    }).join('');
+  }catch(e){}
+}
+setInterval(renderSwarms, 4000); renderSwarms();
+</script>
+</body>
+</html>

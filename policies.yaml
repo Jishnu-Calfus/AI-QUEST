@@ -1,0 +1,36 @@
+# Guardian policies — per-agent guardrails. 'default' applies to unknown agents.
+default:
+  max_cost_usd: 1.00
+  max_tokens: 200000
+  max_steps: 80
+  max_duration_s: 600
+  loop_window: 8
+  loop_similarity: 0.85
+  loop_repeats: 3
+  stall_window: 6
+  judge_every_n_steps: 10
+  warn_threshold: 3.0
+  pause_threshold: 5.0
+  kill_threshold: 8.0
+  pii_block: true
+  budget_action: kill       # what to do on hard budget breach
+  policy_action: kill       # what to do on policy violation
+  drift_action: escalate    # goal drift -> pause + human decision
+
+agents:
+  invoice-summarizer:        # trusted, boring, generous limits
+    max_cost_usd: 2.00
+
+  research-looper:
+    loop_repeats: 3          # loops get caught fast
+
+  doc-spender:
+    max_cost_usd: 0.50       # tight budget: watch it get killed live
+
+  ops-violator:
+    denied_tools: [delete_database, drop_table, send_wire_transfer]
+    denied_patterns: ["DROP\\s+TABLE", "rm\\s+-rf"]
+
+  report-wanderer:
+    judge_every_n_steps: 6   # drift-check more often
+    drift_action: escalate   # human decides on the dashboard

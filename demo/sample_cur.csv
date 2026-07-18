@@ -1,0 +1,8 @@
+swarm_id,category,cost_usd,source,period
+invoice-swarm,llm,0.19,aws_marketplace_bedrock,2026-07-17
+invoice-swarm,db,0.019,aws_cur_rds,2026-07-17
+invoice-swarm,compute,0.048,aws_cur_ecs,2026-07-17
+invoice-swarm,storage,0.058,aws_cur_s3,2026-07-17
+invoice-swarm,api,0.041,aws_cur_apigw,2026-07-17
+rogue-swarm,llm,0.006,aws_marketplace_bedrock,2026-07-17
+rogue-swarm,api,0.019,aws_cur_apigw,2026-07-17

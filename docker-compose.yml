@@ -1,0 +1,26 @@
+services:
+  guardian:
+    build: .
+    ports: ["8090:8090"]
+    environment:
+      GUARDIAN_API_KEY: ${GUARDIAN_API_KEY:-guardian-dev-key}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}   # optional: real LLM judge
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}         # optional fallback judge
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}   # optional alerting
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8090/healthz')"]
+      interval: 5s
+      retries: 5
+
+  # opt-in rogue fleet:  docker compose --profile demo up
+  demo-fleet:
+    profiles: ["demo"]
+    build: .
+    depends_on:
+      guardian:
+        condition: service_healthy
+    environment:
+      GUARDIAN_URL: http://guardian:8090
+      DEMO_TICK: "1.0"
+    working_dir: /app/demo
+    command: ["python", "run_demo.py"]

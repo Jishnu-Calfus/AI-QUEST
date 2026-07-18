@@ -1,0 +1,14 @@
+# Unit costs Guardian uses to price resource events (lane 1: live metering).
+# Derive these from your real bills: e.g. db_query = monthly RDS cost / monthly queries.
+# The daily billing import (lane 2) trues these estimates up against actuals.
+unit_costs:
+  db_query: 0.0004
+  db_connection_hour: 0.02
+  compute_second: 0.00011      # $0.40/hr container share
+  gpu_second: 0.0014
+  storage_gb: 0.023
+  network_gb: 0.09
+  web_search: 0.005
+  embedding_1k: 0.0001
+  vector_query: 0.0002
+  ocr_page: 0.0015
