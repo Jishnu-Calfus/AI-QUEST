@@ -135,8 +135,18 @@ async def human_task_action(task_id: str, body: dict):
 
 @app.get("/v1/clusters")
 async def clusters():
-    """Per-cluster cost + waste rollup (sub-cluster economics)."""
+    """Per-cluster cost + waste rollup (sub-cluster economics roster)."""
     return engine.clusters_summary()
+
+
+@app.get("/v1/clusters/{swarm_id}/{cluster}/analysis")
+async def cluster_analysis(swarm_id: str, cluster: str):
+    """Per-cluster analysis: member roster, cost, waste, policy, topology role,
+    cluster-interaction graph, participating tasks, incidents, diagnosis."""
+    d = engine.cluster_analysis(swarm_id, cluster)
+    if d is None:
+        raise HTTPException(404, "unknown cluster")
+    return d
 
 
 # ---------------- swarm economics ----------------
@@ -262,4 +272,11 @@ async def agent_page():
 async def task_page():
     """Per-task realized-graph page (reads ?task_id= client-side)."""
     path = os.path.join(os.path.dirname(__file__), "task.html")
+    return FileResponse(path)
+
+
+@app.get("/cluster")
+async def cluster_page():
+    """Per-cluster analysis page (reads ?swarm=&cluster= client-side)."""
+    path = os.path.join(os.path.dirname(__file__), "cluster.html")
     return FileResponse(path)

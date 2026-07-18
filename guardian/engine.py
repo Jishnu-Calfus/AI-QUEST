@@ -356,26 +356,166 @@ class Engine:
         d["untouched_clusters"] = [c for c in declared if c not in realized]
         return d
 
-    def clusters_summary(self) -> list[dict]:
-        """Per (swarm, cluster) cost + waste rollup across all runs."""
-        agg: dict[tuple[str, str], dict] = {}
+    @staticmethod
+    def _norm_cluster(c: str) -> str:
+        return c or "(unassigned)"
+
+    def _cluster_keys(self) -> set:
+        keys = set()
         for r in self.runs.values():
-            key = (r.swarm_id, r.cluster or "(unassigned)")
-            a = agg.setdefault(key, {"swarm_id": r.swarm_id,
-                                     "cluster": r.cluster or "(unassigned)",
-                                     "cost_usd": 0.0, "runs": 0, "_agents": set(),
-                                     "outputs_novel": 0, "outputs_total": 0})
-            a["cost_usd"] = round(a["cost_usd"] + r.cost_usd, 6)
-            a["runs"] += 1
-            a["_agents"].add(r.agent_id)
-            a["outputs_novel"] += r.outputs_novel
-            a["outputs_total"] += r.outputs_total
-        out = []
-        for a in agg.values():
-            a["agents"] = sorted(a.pop("_agents"))
-            a["agent_count"] = len(a["agents"])
-            out.append(a)
+            keys.add((r.swarm_id, self._norm_cluster(r.cluster)))
+        for a in self.store.list_agents():
+            keys.add((a["swarm_id"], self._norm_cluster(a.get("cluster", ""))))
+        return keys
+
+    def _cluster_rollup(self, swarm_id: str, cluster: str) -> dict:
+        """One cluster: its member agents (declared + active), fully-loaded cost,
+        category split, and cluster-scoped waste (cost share − contribution share
+        AMONG cluster members). Declared-but-idle agents are included."""
+        members: dict[str, dict] = {}
+        cost_by_cat = {c: 0.0 for c in CATEGORIES}
+        tokens = steps = 0
+
+        def m(aid: str) -> dict:
+            return members.setdefault(aid, {
+                "agent_id": aid, "cost_usd": 0.0, "runs": 0, "outputs_novel": 0,
+                "outputs_total": 0, "state": "idle", "owner": "", "purpose": "",
+                "budget_usd": 0.0})
+
+        for r in self.runs.values():
+            if r.swarm_id != swarm_id or self._norm_cluster(r.cluster) != cluster:
+                continue
+            x = m(r.agent_id)
+            x["cost_usd"] = round(x["cost_usd"] + r.cost_usd, 6)
+            x["runs"] += 1
+            x["outputs_novel"] += r.outputs_novel
+            x["outputs_total"] += r.outputs_total
+            x["state"] = r.state.value
+            for c, v in r.cost_by_cat.items():
+                cost_by_cat[c] = round(cost_by_cat.get(c, 0.0) + v, 6)
+            tokens += r.tokens
+            steps += r.steps
+        for a in self.store.list_agents():
+            if a["swarm_id"] == swarm_id and self._norm_cluster(a.get("cluster", "")) == cluster:
+                x = m(a["agent_id"])
+                x["owner"], x["purpose"] = a.get("owner", ""), a.get("purpose", "")
+                x["budget_usd"] = a.get("budget_usd", 0.0)
+
+        mem = list(members.values())
+        total = sum(x["cost_usd"] for x in mem) or 1e-9
+        novel = sum(x["outputs_novel"] for x in mem) or 1e-9
+        for x in mem:
+            cs, ct = x["cost_usd"] / total, x["outputs_novel"] / novel
+            x["cost_share"] = round(cs, 3)
+            x["contribution_share"] = round(ct, 3)
+            x["waste_score"] = round(max(0.0, cs - ct), 3)
+        mem.sort(key=lambda x: -x["cost_usd"])
+        return {
+            "swarm_id": swarm_id, "cluster": cluster,
+            "cost_usd": round(sum(x["cost_usd"] for x in mem), 6),
+            "cost_by_cat": cost_by_cat, "tokens": tokens, "steps": steps,
+            "runs": sum(x["runs"] for x in mem), "agent_count": len(mem),
+            "outputs_novel": sum(x["outputs_novel"] for x in mem),
+            "outputs_total": sum(x["outputs_total"] for x in mem),
+            "members": mem, "agents": [x["agent_id"] for x in mem],
+            "top_waster": (mem[0]["agent_id"] if mem and mem[0]["waste_score"] > 0.15
+                           else None),
+        }
+
+    def clusters_summary(self) -> list[dict]:
+        """Per (swarm, cluster) rollup — the sub-cluster economics roster."""
+        out = [self._cluster_rollup(s, c) for (s, c) in self._cluster_keys()]
         return sorted(out, key=lambda x: -x["cost_usd"])
+
+    def _cluster_graph(self, swarm_id: str, focus: str) -> dict:
+        """Cluster-topology graph: observed cluster→cluster invocations across all
+        tasks in the swarm, plus declared clusters as nodes. Denied edges in red."""
+        edges: dict[tuple[str, str], dict] = {}
+        nodes: set[str] = set(settings.clusters_for(swarm_id)) | {focus}
+        for t in self.tasks.values():
+            if t.swarm_id != swarm_id:
+                continue
+            for e in t.edges:
+                fc, tc = e.get("from_cluster", ""), e.get("to_cluster", "")
+                nodes.add(fc)
+                nodes.add(tc)
+                cur = edges.setdefault((fc, tc), {"count": 0, "denied": False})
+                cur["count"] += 1
+                cur["denied"] = cur["denied"] or bool(e.get("denied"))
+        return {"focus": focus,
+                "nodes": [{"id": n, "focus": n == focus} for n in sorted(nodes)],
+                "edges": [{"from": a, "to": b, "count": v["count"], "denied": v["denied"]}
+                          for (a, b), v in edges.items()]}
+
+    def cluster_analysis(self, swarm_id: str, cluster: str) -> Optional[dict]:
+        """Per-cluster analysis (the analog of agent_analysis): member roster,
+        cost/category, cluster-scoped waste, governing policy, topology role, the
+        cluster-interaction graph, participating tasks, incidents and a diagnosis."""
+        roll = self._cluster_rollup(swarm_id, cluster)
+        if not roll["members"] and cluster not in settings.clusters_for(swarm_id):
+            return None
+        member_ids = set(roll["agents"])
+
+        pol = settings.policy_for("", swarm_id, cluster)
+        top = settings.topology_for(swarm_id)
+        topology = {
+            "denied_edges": [{"from": f, "to": t} for (f, t) in top.denied_edges
+                             if f == cluster or t == cluster],
+            "requires": top.required_predecessors.get(cluster),
+            "required_by": [c for c, req in top.required_predecessors.items()
+                            if req == cluster],
+        }
+
+        # participating tasks + violations involving this cluster
+        tasks, violations = [], []
+        for t in self.tasks.values():
+            if t.swarm_id != swarm_id or cluster not in t.clusters:
+                continue
+            tasks.append({"task_id": t.task_id, "state": self._task_public(t)["state"],
+                          "cost_here": round(t.cost_by_cluster.get(cluster, 0.0), 6),
+                          "cost_usd": t.cost_usd,
+                          "violation_count": len(t.violations)})
+            for v in t.violations:
+                ev = v.get("evidence", {})
+                if (v.get("cluster") == cluster or ev.get("from_cluster") == cluster
+                        or ev.get("to_cluster") == cluster or ev.get("requires") == cluster):
+                    violations.append({**v, "task_id": t.task_id})
+        tasks.sort(key=lambda x: -x["cost_here"])
+
+        incidents = [i for i in self.store.incidents(500) if i["agent_id"] in member_ids]
+        graph = self._cluster_graph(swarm_id, cluster)
+
+        # diagnosis
+        if violations:
+            kinds = sorted({v["kind"] for v in violations})
+            diag = (f"Cluster '{cluster}' is implicated in {len(violations)} topology "
+                    f"governance event(s): {', '.join(kinds)}. Review the denied edges / "
+                    f"required predecessors below and the frozen tasks.")
+        elif roll["top_waster"]:
+            w = roll["members"][0]
+            diag = (f"Top waster: '{w['agent_id']}' holds {int(w['cost_share']*100)}% of "
+                    f"cluster spend but {int(w['contribution_share']*100)}% of its novel "
+                    f"output. Candidate for consolidation or a tighter budget.")
+        else:
+            diag = (f"Healthy: {roll['agent_count']} agent(s), ${roll['cost_usd']:.4f} across "
+                    f"{len(tasks)} task(s); no topology violations.")
+
+        return {
+            "swarm_id": swarm_id, "cluster": cluster,
+            "summary": {k: roll[k] for k in ("cost_usd", "cost_by_cat", "tokens",
+                                             "steps", "runs", "agent_count",
+                                             "outputs_novel", "outputs_total")},
+            "members": roll["members"], "top_waster": roll["top_waster"],
+            "policy": {
+                "max_cost_usd": pol.max_cost_usd, "max_tokens": pol.max_tokens,
+                "max_steps": pol.max_steps, "allowed_tools": pol.allowed_tools,
+                "denied_tools": pol.denied_tools, "pii_block": pol.pii_block,
+                "budget_action": pol.budget_action, "policy_action": pol.policy_action,
+            },
+            "topology": topology, "graph": graph, "tasks": tasks,
+            "task_count": len(tasks), "violations": violations,
+            "incidents": incidents, "diagnosis": diag,
+        }
 
     async def human_task_action(self, task_id: str, action: str,
                                 who: str = "operator") -> Optional[dict]:
