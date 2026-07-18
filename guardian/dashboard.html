@@ -27,6 +27,8 @@
            padding:3px 10px; font-size:12px; cursor:pointer; margin-right:4px; }
   button:hover { border-color:var(--info); }
   button.kill:hover { border-color:var(--bad); color:var(--bad); }
+  a.alink { color:var(--info); text-decoration:none; border-bottom:1px dotted transparent; }
+  a.alink:hover { border-bottom-color:var(--info); }
   #incidents .inc { border-left:3px solid var(--bad); padding:8px 10px; margin-bottom:8px; background:#181f30; border-radius:0 8px 8px 0; }
   #incidents .inc.warn { border-left-color:var(--warn); }
   .inc b { font-size:13px; } .inc p { color:var(--dim); font-size:12px; margin-top:3px; }
@@ -81,7 +83,7 @@ function renderRuns(){
     cost += r.cost_usd||0;
     const suspPct = Math.min(100,(r.suspicion||0)/8*100);
     const tr=document.createElement('tr');
-    tr.innerHTML = `<td class="mono">${esc(r.agent_id)}</td>
+    tr.innerHTML = `<td class="mono"><a class="alink" href="/agent?agent_id=${encodeURIComponent(r.agent_id)}" title="open agent-level trace &amp; analysis">${esc(r.agent_id)}</a></td>
       <td style="max-width:210px;color:var(--dim)">${esc((r.goal||'—').slice(0,80))}</td>
       <td><span class="pill ${r.state}">${r.state}</span></td>
       <td>${r.steps}</td>
@@ -147,7 +149,7 @@ async function renderSwarms(){
         .map(([c,v])=>`<span style="color:${CATCOLORS[c]}">■</span> ${c} $${v.toFixed(3)}`).join(' &nbsp;');
       const agents = s.agents.slice(0,5).map(a=>{
         const waste = a.waste_score>0.15?` <span class="tag kill" title="cost share ${(a.cost_share*100).toFixed(0)}%, contribution ${(a.contribution_share*100).toFixed(0)}%">WASTE ${(a.waste_score*100).toFixed(0)}%</span>`:'';
-        return `<tr><td class="mono">${esc(a.agent_id)}</td><td class="mono cost">$${a.cost_usd.toFixed(3)}</td>
+        return `<tr><td class="mono"><a class="alink" href="/agent?agent_id=${encodeURIComponent(a.agent_id)}">${esc(a.agent_id)}</a></td><td class="mono cost">$${a.cost_usd.toFixed(3)}</td>
           <td>${(a.cost_share*100).toFixed(0)}% cost / ${(a.contribution_share*100).toFixed(0)}% output${waste}</td></tr>`;
       }).join('');
       const rc = reconMap[s.swarm_id];
