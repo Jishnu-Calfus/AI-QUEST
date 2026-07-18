@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Guardian — Agent Analysis</title>
+<style>
+  :root { --bg:#0b0e14; --card:#141926; --line:#232b3d; --txt:#e6e9f0; --dim:#8b94a7;
+          --ok:#2dd4a7; --warn:#f5b23e; --bad:#f4587a; --info:#5aa7ff; --purple:#b58aff; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--txt); font:14px/1.45 ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif; padding:20px; }
+  a { color:var(--info); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  .top { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:2px; }
+  h1 { font-size:20px; letter-spacing:.3px; }
+  h1 .shield { color:var(--ok); }
+  .mono { font:12px ui-monospace,Menlo,monospace; }
+  .sub { color:var(--dim); font-size:12px; margin:3px 0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:1.2px; color:var(--dim); margin-bottom:10px; }
+  .grid { display:grid; grid-template-columns: 1.35fr .85fr; gap:14px; align-items:start; }
+  @media (max-width:1050px){ .grid{ grid-template-columns:1fr; } }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.8px; padding:4px 8px; }
+  td { padding:6px 8px; border-top:1px solid var(--line); font-size:13px; vertical-align:top; }
+  .pill { display:inline-block; padding:1px 10px; border-radius:20px; font-size:11px; font-weight:600; }
+  .running{background:#12351f;color:var(--ok)} .warned{background:#3a2d10;color:var(--warn)}
+  .paused{background:#3a2d10;color:var(--warn)} .escalated{background:#3d1420;color:var(--bad)}
+  .killed{background:#3d1420;color:var(--bad)} .finished{background:#1c2333;color:var(--dim)}
+  .unknown{background:#1c2333;color:var(--dim)}
+  #kpis { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 16px; flex:1; min-width:120px; }
+  .kpi .v { font-size:21px; font-weight:700; } .kpi .l { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:1px; }
+  .cost { color:var(--warn); }
+  .diag { border:1px solid var(--line); border-left:4px solid var(--info); border-radius:0 10px 10px 0; background:#101827; padding:14px 16px; margin-bottom:14px; }
+  .diag.loop, .diag.killed { border-left-color:var(--bad); background:#1a1220; }
+  .diag h3 { font-size:14px; margin-bottom:6px; }
+  .diag p { color:#cdd3e0; font-size:13px; margin:4px 0; }
+  .diag .fix { color:var(--dim); font-size:12px; margin-top:8px; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:3px 12px; font-size:12.5px; }
+  .kv .k { color:var(--dim); } .kv .v2 { text-align:right; }
+  .looptbl td { border:none; padding:2px 10px 2px 0; font-size:12.5px; }
+  .looptbl .k { color:var(--dim); }
+  .bar { height:8px; background:var(--line); border-radius:4px; overflow:hidden; margin:6px 0; display:flex; }
+  .bar i { display:block; height:100%; }
+  .chip { display:inline-block; padding:0 7px; border-radius:5px; font-size:10.5px; font-weight:600; text-transform:uppercase; letter-spacing:.4px; }
+  .chip.llm_call{background:#152b45;color:var(--info)} .chip.tool_call{background:#0f3229;color:var(--ok)}
+  .chip.resource{background:#241a3a;color:var(--purple)} .chip.output{background:#33290f;color:var(--warn)}
+  .chip.error{background:#3d1420;color:var(--bad)} .chip.run_start,.chip.run_end{background:#1c2333;color:var(--dim)}
+  .catchip { display:inline-block; padding:0 6px; border-radius:4px; font-size:10px; color:#0b0e14; font-weight:700; }
+  #trace { max-height:460px; overflow-y:auto; }
+  .trow { display:flex; gap:8px; padding:6px 4px; border-bottom:1px dashed #1a2133; font-size:12.5px; align-items:baseline; }
+  .trow .seq { color:var(--dim); font:11px ui-monospace,monospace; width:30px; flex:none; text-align:right; }
+  .trow .body { flex:1; min-width:0; }
+  .trow .nm { font:12px ui-monospace,monospace; }
+  .trow .ct { color:var(--dim); }
+  .trow .meta { flex:none; text-align:right; color:var(--dim); font:11px ui-monospace,monospace; white-space:nowrap; }
+  .rep { color:var(--bad); font-weight:700; }
+  .trow.rep-row { background:#1a1220; }
+  .inc { border-left:3px solid var(--bad); padding:8px 10px; margin-bottom:8px; background:#181f30; border-radius:0 8px 8px 0; }
+  .inc.warn { border-left-color:var(--warn); }
+  .inc b { font-size:13px; } .inc p { color:var(--dim); font-size:12px; margin-top:3px; }
+  .inc .ev { color:var(--dim); font:11px ui-monospace,monospace; margin-top:4px; }
+  .tag { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:1px; }
+  .tag.kill,.tag.escalate{color:var(--bad)} .tag.pause,.tag.warn{color:var(--warn)}
+  #audit { max-height:240px; overflow-y:auto; font:12px ui-monospace,Menlo,monospace; }
+  #audit div { padding:3px 0; border-bottom:1px dashed #1a2133; color:var(--dim); }
+  #audit .ac { color:var(--txt); }
+  .graphwrap { overflow-x:auto; border:1px solid var(--line); border-radius:8px; background:#0d1220; }
+  .glegend { font-size:11px; color:var(--dim); margin-top:8px; display:flex; gap:14px; flex-wrap:wrap; }
+  .glegend span b { font-weight:700; }
+  .live { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--dim); }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--ok); box-shadow:0 0 0 0 rgba(45,212,167,.6); }
+  .dot.pulse { animation:pulse 1s ease-out; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(45,212,167,.6)} 100%{box-shadow:0 0 0 8px rgba(45,212,167,0)} }
+  .btn { background:transparent; border:1px solid var(--line); color:var(--txt); border-radius:6px; padding:4px 12px; font-size:12px; cursor:pointer; }
+  .btn:hover{ border-color:var(--info); } .btn.kill:hover{ border-color:var(--bad); color:var(--bad); }
+  .muted { color:var(--dim); }
+</style>
+</head>
+<body>
+<div class="top">
+  <a href="/" title="back to fleet dashboard">← fleet</a>
+  <h1><span class="shield">⬡</span> <span id="agent-name" class="mono">…</span></h1>
+  <span id="state" class="pill unknown">…</span>
+  <span id="controls"></span>
+  <span class="live" style="margin-left:auto"><span id="dot" class="dot"></span><span id="upd">connecting…</span></span>
+</div>
+<div class="sub" id="meta">agent-level tracing · full trace, tool calls, cost, governance &amp; root-cause diagnosis</div>
+
+<div id="kpis"></div>
+<div id="diag"></div>
+
+<div class="grid">
+  <div>
+    <div class="card">
+      <h2>Trace &amp; tool graph <span class="muted" style="text-transform:none;letter-spacing:0">— actions as nodes, transitions as edges, loops in red</span></h2>
+      <div class="graphwrap"><div id="graph" style="padding:6px"></div></div>
+      <div class="glegend" id="glegend"></div>
+    </div>
+    <div class="card">
+      <h2>Trace timeline <span class="muted" style="text-transform:none;letter-spacing:0" id="tracecount"></span></h2>
+      <div id="trace"><p class="muted">no events yet</p></div>
+      <label class="muted" style="font-size:11px;display:block;margin-top:6px">
+        <input type="checkbox" id="follow" checked> follow (auto-scroll to newest)</label>
+    </div>
+  </div>
+  <div>
+    <div class="card"><h2>Cost breakdown — full stack</h2><div id="cost"></div></div>
+    <div class="card"><h2>Tool &amp; LLM calls</h2><div id="tools"></div></div>
+    <div class="card"><h2>Governance — policy in force</h2><div id="gov"></div></div>
+    <div class="card"><h2>Incidents</h2><div id="incidents"><p class="muted">none</p></div></div>
+    <div class="card"><h2>Audit trail</h2><div id="audit"><p class="muted">none</p></div></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => (s==null?'':s.toString()).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const agentId = new URLSearchParams(location.search).get('agent_id') || 'default';
+const CAT = {llm:'#5aa7ff', api:'#2dd4a7', db:'#f5b23e', compute:'#b58aff', storage:'#f4587a', other:'#8b94a7'};
+const NODECOLOR = {llm_call:'#5aa7ff', tool_call:'#2dd4a7', resource:'#b58aff', output:'#f5b23e', error:'#f4587a'};
+document.title = 'Guardian — ' + agentId;
+let runIds = new Set();
+
+const fmtCost = v => '$'+(v||0).toFixed(v>=1?2:4);
+const fmtDur  = s => s>=60 ? (s/60).toFixed(1)+'m' : (s||0).toFixed(1)+'s';
+const shortTs = t => { const d=new Date((t||0)*1000); return d.toLocaleTimeString(); };
+
+async function load(){
+  let a;
+  try { a = await (await fetch(`/v1/agents/${encodeURIComponent(agentId)}/analysis`)).json(); }
+  catch(e){ $('upd').textContent='fetch error'; return; }
+  runIds = new Set((a.runs||[]).map(r=>r.run_id));
+  render(a);
+  $('upd').textContent = 'updated ' + new Date().toLocaleTimeString();
+}
+
+function render(a){
+  const s = a.summary || {};
+  $('agent-name').textContent = a.agent_id;
+  const stEl = $('state'); stEl.className = 'pill ' + (a.state||'unknown'); stEl.textContent = a.state||'unknown';
+  const p = a.profile;
+  $('meta').innerHTML = (p
+      ? `owner <b>${esc(p.owner||'—')}</b> · purpose <span class="muted">${esc(p.purpose||'—')}</span> · `
+      : `<span class="muted">unregistered agent · </span>`)
+    + `swarm <a href="/#" class="mono">${esc(a.swarm_id)}</a>`
+    + (a.goal ? ` · goal <span class="muted">“${esc(a.goal)}”</span>` : '');
+  renderControls(a);
+  renderKPIs(s);
+  renderDiag(a);
+  renderCost(s);
+  renderTools(a.tool_calls||[]);
+  renderGov(a);
+  renderGraph(a.graph||{nodes:[],edges:[]});
+  renderTrace(a.trace||[]);
+  renderIncidents(a.incidents||[]);
+  renderAudit(a.audit||[]);
+}
+
+function renderControls(a){
+  const st = a.state, rid = (a.runs&&a.runs.length)? a.runs[a.runs.length-1].run_id : null;
+  if(!rid || st==='killed' || st==='finished' || st==='unknown'){ $('controls').innerHTML=''; return; }
+  if(st==='paused' || st==='escalated')
+    $('controls').innerHTML = `<button class="btn" onclick="act('${rid}','resume')">resume</button> <button class="btn kill" onclick="act('${rid}','kill')">kill</button>`;
+  else
+    $('controls').innerHTML = `<button class="btn" onclick="act('${rid}','pause')">pause</button> <button class="btn kill" onclick="act('${rid}','kill')">kill</button>`;
+}
+async function act(id,a){ await fetch(`/v1/runs/${id}/action`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a,who:'agent-view'})}); setTimeout(load,150); }
+
+function renderKPIs(s){
+  const waste = (s.waste_score||0)*100;
+  const wcol = waste>15?'var(--bad)':waste>5?'var(--warn)':'var(--txt)';
+  const susp = s.suspicion||0;
+  const scol = susp>=8?'var(--bad)':susp>=5?'var(--warn)':'var(--txt)';
+  $('kpis').innerHTML = `
+    <div class="kpi"><div class="v cost">${fmtCost(s.cost_usd)}</div><div class="l">true cost</div></div>
+    <div class="kpi"><div class="v">${s.steps||0}</div><div class="l">steps</div></div>
+    <div class="kpi"><div class="v">${(s.tokens||0).toLocaleString()}</div><div class="l">tokens</div></div>
+    <div class="kpi"><div class="v">${fmtDur(s.duration_s)}</div><div class="l">duration</div></div>
+    <div class="kpi"><div class="v">${s.outputs_novel||0}/${s.outputs_total||0}</div><div class="l">novel / outputs</div></div>
+    <div class="kpi"><div class="v" style="color:${wcol}">${waste.toFixed(0)}%</div><div class="l">waste score</div></div>
+    <div class="kpi"><div class="v" style="color:${scol}">${susp.toFixed(1)}</div><div class="l">suspicion</div></div>`;
+}
+
+function renderDiag(a){
+  const d = a.diagnosis||{}, loop = d.loop||{};
+  const cls = loop.detected ? 'loop' : (a.state==='killed' ? 'killed' : '');
+  let looptbl = '';
+  if(loop.detected){
+    looptbl = `<table class="looptbl" style="margin-top:8px"><tbody>
+      <tr><td class="k">repeated action</td><td class="mono rep">${esc(loop.action)}</td>
+          <td class="k">repeats</td><td class="mono">${loop.repeats}×</td></tr>
+      <tr><td class="k">input similarity</td><td class="mono">~${loop.similarity_pct}%</td>
+          <td class="k">step range</td><td class="mono">${loop.first_step}–${loop.last_step}</td></tr>
+      <tr><td class="k">novel outputs</td><td class="mono">${loop.novel_outputs}</td>
+          <td class="k">wasted spend</td><td class="mono cost">${fmtCost(loop.wasted_cost_usd)}</td></tr>
+      <tr><td class="k">terminated by</td><td class="mono">${esc(loop.terminated_by||'—')}${loop.terminated_at_step?(' @ step '+loop.terminated_at_step):''}</td>
+          <td class="k">detector</td><td class="mono">${esc(loop.incident_title||'—')}</td></tr>
+      </tbody></table>`
+      + (loop.samples&&loop.samples.length ? `<div class="ev" style="margin-top:6px;color:var(--dim);font:11px ui-monospace,monospace">sample calls: ${loop.samples.map(x=>'“'+esc(x)+'”').join(' · ')}</div>` : '');
+  }
+  $('diag').innerHTML = `<div class="diag ${cls}">
+    <h3>${loop.detected?'🔁 Root cause — repetition loop':'🩺 Root-cause diagnosis'}
+        <span class="muted" style="font-weight:400;font-size:11px">(${esc(d.provider||'mock')})</span></h3>
+    <p>${esc(d.root_cause||'No incidents recorded — runtime behaviour looks clean.')}</p>
+    ${looptbl}
+    ${d.fix_suggestion?`<div class="fix"><b>Fix:</b> ${esc(d.fix_suggestion)}</div>`:''}
+  </div>`;
+}
+
+function renderCost(s){
+  const cats = Object.entries(s.cost_by_cat||{}).filter(([,v])=>v>0);
+  const total = s.cost_usd||0;
+  if(!cats.length){ $('cost').innerHTML = '<p class="muted">no cost recorded yet</p>'; return; }
+  const segs = cats.map(([c,v])=>`<i title="${c}: ${fmtCost(v)}" style="width:${Math.max(2,v/(total||1)*100)}%;background:${CAT[c]||'#888'}"></i>`).join('');
+  const rows = cats.sort((a,b)=>b[1]-a[1]).map(([c,v])=>
+     `<tr><td><span class="catchip" style="background:${CAT[c]||'#888'}">${c}</span></td>
+      <td class="mono cost">${fmtCost(v)}</td><td class="muted mono">${(v/(total||1)*100).toFixed(0)}%</td></tr>`).join('');
+  $('cost').innerHTML = `<div style="font-size:16px" class="mono cost">${fmtCost(total)}</div>
+    <div class="bar">${segs}</div><table>${rows}</table>`;
+}
+
+function renderTools(tools){
+  if(!tools.length){ $('tools').innerHTML='<p class="muted">no tool/LLM calls</p>'; return; }
+  const rows = tools.map(t=>`<tr>
+     <td class="mono">${esc(t.name)} <span class="chip ${t.type}">${t.type.replace('_call','')}</span></td>
+     <td class="mono">${t.count}×</td>
+     <td class="mono cost">${fmtCost(t.cost_usd)}</td>
+     <td class="mono muted">${(t.tokens||0).toLocaleString()}</td></tr>`).join('');
+  $('tools').innerHTML = `<table><thead><tr><th>action</th><th>calls</th><th>cost</th><th>tokens</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderGov(a){
+  const p = a.policy||{}, pr = a.profile;
+  const denied = (p.denied_tools&&p.denied_tools.length)? p.denied_tools.map(t=>`<span class="chip error">${esc(t)}</span>`).join(' ') : '<span class="muted">none</span>';
+  const pats = (p.denied_patterns&&p.denied_patterns.length)? p.denied_patterns.map(esc).join(', ') : '—';
+  $('gov').innerHTML = `<div class="kv">
+    <div class="k">budget cap</div><div class="v2 mono cost">${fmtCost(p.max_cost_usd)} → ${esc(p.budget_action)}</div>
+    <div class="k">max tokens</div><div class="v2 mono">${(p.max_tokens||0).toLocaleString()}</div>
+    <div class="k">max steps</div><div class="v2 mono">${p.max_steps}</div>
+    <div class="k">max duration</div><div class="v2 mono">${fmtDur(p.max_duration_s)}</div>
+    <div class="k">loop rule</div><div class="v2 mono">${p.loop_repeats}× @ ≥${Math.round((p.loop_similarity||0)*100)}% sim</div>
+    <div class="k">stall window</div><div class="v2 mono">${p.stall_window} outputs</div>
+    <div class="k">ladder</div><div class="v2 mono">warn ${p.warn_threshold} · pause ${p.pause_threshold} · kill ${p.kill_threshold}</div>
+    <div class="k">policy breach</div><div class="v2 mono">→ ${esc(p.policy_action)}</div>
+    <div class="k">goal drift</div><div class="v2 mono">→ ${esc(p.drift_action)}</div>
+    <div class="k">PII blocking</div><div class="v2 mono">${p.pii_block?'on':'off'}</div>
+    <div class="k">denied tools</div><div class="v2">${denied}</div>
+    <div class="k">denied patterns</div><div class="v2 mono">${pats}</div>
+  </div>` + (pr?`<div class="kv" style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px">
+    <div class="k">owner</div><div class="v2">${esc(pr.owner||'—')}</div>
+    <div class="k">declared budget</div><div class="v2 mono">${fmtCost(pr.budget_usd)}</div>
+    <div class="k">registered</div><div class="v2 mono">${pr.registered_ts?shortTs(pr.registered_ts):'—'}</div>
+  </div>`:'');
+}
+
+function renderTrace(trace){
+  $('tracecount').textContent = trace.length ? `— ${trace.length} steps` : '';
+  const box = $('trace');
+  if(!trace.length){ box.innerHTML='<p class="muted">no events yet</p>'; return; }
+  const stick = $('follow').checked;
+  box.innerHTML = trace.map(t=>`
+    <div class="trow ${t.is_repeat?'rep-row':''}">
+      <div class="seq">${t.seq}</div>
+      <div class="body"><span class="chip ${t.type}">${t.type.replace('_call','').replace('run_','')}</span>
+        <span class="nm">${esc(t.name)}</span>
+        ${t.is_repeat?'<span class="rep" title="near-identical to an earlier call">⟲ repeat</span>':''}
+        <span class="ct">${esc(t.content).slice(0,140)}</span></div>
+      <div class="meta"><span class="catchip" style="background:${CAT[t.category]||'#888'}">${t.category}</span>
+        ${t.cost_usd>0?' '+fmtCost(t.cost_usd):''}${t.tokens_in+t.tokens_out>0?' · '+(t.tokens_in+t.tokens_out)+'tk':''}</div>
+    </div>`).join('');
+  if(stick) box.scrollTop = box.scrollHeight;
+}
+
+function renderIncidents(incs){
+  const box = $('incidents');
+  if(!incs.length){ box.innerHTML='<p class="muted">none — no interventions on this agent</p>'; return; }
+  box.innerHTML = incs.map(i=>{
+    const ev = (i.signals||[]).map(s=>{
+      const e = s.evidence||{}; const kv = Object.entries(e).slice(0,3).map(([k,v])=>`${k}=${esc(String(v)).slice(0,40)}`).join(' ');
+      return `${esc(s.detector)}: ${kv}`;
+    }).filter(Boolean).slice(0,3).join(' · ');
+    return `<div class="inc ${i.action==='warn'||i.action==='pause'?'warn':''}">
+      <span class="tag ${i.action}">${esc(i.action)}</span> <span class="mono muted">${shortTs(i.ts)}</span>
+      <div><b>${esc(i.title)}</b></div><p>${esc(i.explanation)}</p>
+      ${ev?`<div class="ev">${ev}</div>`:''}</div>`;
+  }).join('');
+}
+
+function renderAudit(rows){
+  const box = $('audit');
+  if(!rows.length){ box.innerHTML='<p class="muted">none</p>'; return; }
+  box.innerHTML = rows.map(r=>`<div><span class="muted">${shortTs(r.ts)}</span>
+    <span class="ac">${esc(r.actor)}</span> <b>${esc(r.action)}</b>
+    <span class="muted">${esc((r.detail||'').slice(0,90))}</span></div>`).join('');
+}
+
+// ---------------- adaptive SVG trace/tool graph ----------------
+function renderGraph(g){
+  const nodes = g.nodes||[], edges = g.edges||[];
+  const legend = $('glegend');
+  if(!nodes.length){ $('graph').innerHTML='<p class="muted" style="padding:14px">no graph yet — waiting for agent activity</p>'; legend.innerHTML=''; return; }
+  const idx = {}; nodes.forEach((n,i)=>idx[n.id]=i);
+  const NW=150, NH=52, GAP=64, MX=28, midY=Math.round(NH/2)+82;
+  const W = MX*2 + nodes.length*NW + Math.max(0,nodes.length-1)*GAP;
+  const H = midY + NH/2 + 96;
+  const xOf = i => MX + i*(NW+GAP);
+  const hasLoop = edges.some(e=>e.loop);
+
+  let defs = `<defs>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#4d5b7a"/></marker>
+    <marker id="arL" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#f4587a"/></marker>
+  </defs>`;
+
+  // edges first (under nodes)
+  let ep = '';
+  edges.forEach(e=>{
+    const i=idx[e.from], j=idx[e.to]; if(i==null||j==null) return;
+    const thick = Math.min(6, 1.4 + Math.log2(e.count+1));
+    const col = e.loop ? '#f4587a' : '#4d5b7a';
+    const mk = e.loop ? 'arL' : 'ar';
+    let path, lx, ly;
+    if(i===j){ // self-loop (repeats a single action back-to-back)
+      const cx=xOf(i)+NW*0.5, ty=midY-NH/2;
+      path=`M ${cx-16} ${ty} C ${cx-24} ${ty-46}, ${cx+24} ${ty-46}, ${cx+16} ${ty}`;
+      lx=cx; ly=ty-40;
+    } else if(j>i){ // forward flow — arc above
+      const x1=xOf(i)+NW, x2=xOf(j), span=j-i, h=26+span*20, cy=midY-h;
+      path=`M ${x1} ${midY} C ${x1+(x2-x1)*0.25} ${cy}, ${x1+(x2-x1)*0.75} ${cy}, ${x2} ${midY}`;
+      lx=(x1+x2)/2; ly=cy+3;
+    } else { // back-edge = loop — arc below, red
+      const x1=xOf(i)+NW*0.5, x2=xOf(j)+NW*0.5, y=midY+NH/2, span=i-j, h=30+span*22, cy=y+h;
+      path=`M ${x1} ${y} C ${x1} ${cy}, ${x2} ${cy}, ${x2} ${y}`;
+      lx=(x1+x2)/2; ly=cy-4;
+    }
+    ep += `<path d="${path}" fill="none" stroke="${col}" stroke-width="${thick.toFixed(1)}" marker-end="url(#${mk})" opacity="0.9"/>`;
+    if(e.count>1 || e.loop){
+      const label = (e.loop?'⟲ ':'') + e.count + '×';
+      ep += `<rect x="${lx-15}" y="${ly-9}" width="30" height="15" rx="4" fill="#0d1220" stroke="${col}" opacity="0.95"/>`
+          + `<text x="${lx}" y="${ly+2}" text-anchor="middle" font-size="10" fill="${col}" font-family="ui-monospace,monospace">${label}</text>`;
+    }
+  });
+
+  // nodes
+  let np = '';
+  nodes.forEach((n,i)=>{
+    const x=xOf(i), y=midY-NH/2, col=NODECOLOR[n.type]||'#8b94a7';
+    const label = n.id.length>17 ? n.id.slice(0,16)+'…' : n.id;
+    np += `<g>
+      <rect x="${x}" y="${y}" width="${NW}" height="${NH}" rx="9" fill="#141926" stroke="${col}" stroke-width="1.5"/>
+      <rect x="${x}" y="${y}" width="4" height="${NH}" rx="2" fill="${col}"/>
+      <text x="${x+14}" y="${y+20}" font-size="12.5" fill="#e6e9f0" font-family="ui-monospace,monospace">${esc(label)}</text>
+      <text x="${x+14}" y="${y+38}" font-size="10.5" fill="#8b94a7" font-family="ui-monospace,monospace">${n.count}× · ${fmtCost(n.cost)}</text>
+      <circle cx="${x+NW-13}" cy="${y+15}" r="9" fill="#0d1220" stroke="${col}"/>
+      <text x="${x+NW-13}" y="${y+18.5}" text-anchor="middle" font-size="10" fill="${col}" font-family="ui-monospace,monospace">${i+1}</text>
+    </g>`;
+  });
+
+  $('graph').innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="max-width:none">${defs}${ep}${np}</svg>`;
+  legend.innerHTML =
+    Object.entries(NODECOLOR).map(([t,c])=>`<span><b style="color:${c}">■</b> ${t.replace('_call','')}</span>`).join('')
+    + `<span><b style="color:#f4587a">▬</b> ${hasLoop?'loop / back-edge (repetition)':'no loops detected'}</span>`
+    + `<span class="muted">edge label = transition count · node ●n = first-seen order</span>`;
+}
+
+// ---------------- realtime: SSE + poll fallback ----------------
+let reloadTimer=null;
+function scheduleReload(){ if(reloadTimer) return; reloadTimer=setTimeout(()=>{reloadTimer=null; load();}, 450); }
+function pulse(){ const d=$('dot'); d.classList.remove('pulse'); void d.offsetWidth; d.classList.add('pulse'); }
+
+function connectSSE(){
+  const es = new EventSource('/v1/stream');
+  es.onopen = ()=>{ $('upd').textContent='live'; };
+  es.onmessage = m=>{
+    let msg; try{ msg=JSON.parse(m.data); }catch(e){ return; }
+    const d = msg.data||{};
+    const mine = d.agent_id===agentId || (d.run_id && runIds.has(d.run_id));
+    if(mine){ pulse(); scheduleReload(); }
+  };
+  es.onerror = ()=>{ $('upd').textContent='reconnecting…'; };
+}
+
+load();
+connectSSE();
+setInterval(load, 3000);   // reconcile in case SSE missed anything
+</script>
+</body>
+</html>

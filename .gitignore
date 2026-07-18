@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# uv scaffold (not used by the app)
+demo/.python-version
+demo/pyproject.toml
+demo/uv.lock
+
+# local runtime state
+*.db
+*.db-journal
+demo/demo.log
+server.log
+
+# editor / local
+.claude/settings.local.json

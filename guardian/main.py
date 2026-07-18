@@ -159,6 +159,13 @@ async def agents():
     return store.list_agents()
 
 
+@app.get("/v1/agents/{agent_id}/analysis")
+async def agent_analysis(agent_id: str):
+    """Agent-level tracing: full trace, tool rollup, trace graph, governing
+    policy, incidents, audit trail and loop-aware root-cause diagnosis."""
+    return await engine.agent_analysis(agent_id)
+
+
 # ---------------- feeds ----------------
 
 @app.get("/v1/incidents")
@@ -207,4 +214,11 @@ async def healthz():
 @app.get("/")
 async def dashboard():
     path = os.path.join(os.path.dirname(__file__), "dashboard.html")
+    return FileResponse(path)
+
+
+@app.get("/agent")
+async def agent_page():
+    """Per-agent analysis landing page (reads ?agent_id= client-side)."""
+    path = os.path.join(os.path.dirname(__file__), "agent.html")
     return FileResponse(path)

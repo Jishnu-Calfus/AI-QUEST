@@ -86,6 +86,20 @@ class Store:
                            cost_usd=r[8], ts=r[9], meta=json.loads(r[10] or "{}"))
                 for r in rows]
 
+    def events_by_agent(self, agent_id: str, limit: int = 5000) -> list[AgentEvent]:
+        """All events for an agent across every run, oldest first — the raw
+        material for agent-level tracing and debugging."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT event_id, run_id, agent_id, type, name, content, tokens_in,"
+                " tokens_out, cost_usd, ts, meta FROM events WHERE agent_id=?"
+                " ORDER BY ts ASC LIMIT ?", (agent_id, limit),
+            ).fetchall()
+        return [AgentEvent(event_id=r[0], run_id=r[1], agent_id=r[2], type=r[3],
+                           name=r[4], content=r[5], tokens_in=r[6], tokens_out=r[7],
+                           cost_usd=r[8], ts=r[9], meta=json.loads(r[10] or "{}"))
+                for r in rows]
+
     def incidents(self, limit: int = 50) -> list[dict]:
         with self._lock:
             rows = self._conn.execute(
@@ -114,6 +128,16 @@ class Store:
                 " registered_ts FROM registry ORDER BY swarm_id, agent_id").fetchall()
         return [dict(agent_id=r[0], swarm_id=r[1], owner=r[2], purpose=r[3],
                      budget_usd=r[4], registered_ts=r[5]) for r in rows]
+
+    def get_agent(self, agent_id: str) -> dict | None:
+        with self._lock:
+            r = self._conn.execute(
+                "SELECT agent_id, swarm_id, owner, purpose, budget_usd,"
+                " registered_ts FROM registry WHERE agent_id=?", (agent_id,)).fetchone()
+        if not r:
+            return None
+        return dict(agent_id=r[0], swarm_id=r[1], owner=r[2], purpose=r[3],
+                    budget_usd=r[4], registered_ts=r[5])
 
     # ---- billing true-up (lane 2) ----
 
