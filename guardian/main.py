@@ -139,6 +139,14 @@ async def clusters():
     return engine.clusters_summary()
 
 
+@app.get("/v1/runtime")
+async def runtime_subagents():
+    """Runtime-subagent tracking: off-chart agents the LLM spun up at runtime,
+    grouped into discovered ('emergent') clusters, flagged when they reach a
+    sensitive cluster, and reconciled against the declared org chart."""
+    return engine.runtime_summary()
+
+
 @app.get("/v1/clusters/{swarm_id}/{cluster}/analysis")
 async def cluster_analysis(swarm_id: str, cluster: str):
     """Per-cluster analysis: member roster, cost, waste, policy, topology role,
@@ -279,4 +287,11 @@ async def task_page():
 async def cluster_page():
     """Per-cluster analysis page (reads ?swarm=&cluster= client-side)."""
     path = os.path.join(os.path.dirname(__file__), "cluster.html")
+    return FileResponse(path)
+
+
+@app.get("/runtime")
+async def runtime_page():
+    """Runtime-subagents tab: emergent clusters discovered at runtime."""
+    path = os.path.join(os.path.dirname(__file__), "runtime.html")
     return FileResponse(path)

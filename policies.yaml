@@ -47,6 +47,9 @@ swarms:
       on_missing_predecessor: escalate
       on_fanout_breach: pause
       on_task_budget: pause
+      on_shadow_utilization: warn                # off-chart runtime subagents:
+                                                 #   track + flag on /runtime, don't
+                                                 #   freeze (discovery, not blocking)
 
 agents:
   invoice-summarizer:        # trusted, boring, generous limits

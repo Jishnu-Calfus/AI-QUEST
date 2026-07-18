@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Guardian — Runtime Subagents</title>
+<style>
+  :root { --bg:#0b0e14; --card:#141926; --line:#232b3d; --txt:#e6e9f0; --dim:#8b94a7;
+          --ok:#2dd4a7; --warn:#f5b23e; --bad:#f4587a; --info:#5aa7ff; --purple:#b58aff; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--txt); font:14px/1.45 ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif; padding:20px; }
+  a { color:var(--info); text-decoration:none; } a:hover { text-decoration:underline; }
+  h1 { font-size:19px; letter-spacing:.3px; } h1 .shield { color:var(--ok); }
+  .sub { color:var(--dim); font-size:12px; margin:3px 0 14px; max-width:900px; }
+  .mono { font:12px ui-monospace,Menlo,monospace; }
+  .muted { color:var(--dim); }
+  .cost { color:var(--warn); }
+  .top { display:flex; align-items:center; gap:12px; }
+  .live { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--dim); margin-left:auto; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--ok); }
+  /* tabs */
+  .nav { display:flex; gap:6px; margin:0 0 16px; }
+  .nav a { color:var(--dim); text-decoration:none; font-size:12px; font-weight:600; padding:6px 14px;
+           border:1px solid var(--line); border-radius:8px; letter-spacing:.3px; }
+  .nav a:hover { border-color:var(--info); color:var(--txt); text-decoration:none; }
+  .nav a.active { background:var(--card); color:var(--txt); border-color:var(--info); }
+  /* kpis */
+  #kpis { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:11px 18px; flex:1; min-width:150px; }
+  .kpi .v { font-size:23px; font-weight:700; } .kpi .l { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:1px; }
+  /* cards */
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:1.2px; color:var(--dim); margin-bottom:10px; }
+  .swarmhdr { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin:22px 0 10px; }
+  .swarmhdr h2 { font-size:15px; } .swarmhdr .mono { color:var(--info); }
+  /* emergent cluster cards */
+  .egrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(310px,1fr)); gap:12px; }
+  .ec { border:1px solid var(--line); border-radius:10px; padding:12px 13px; background:#111726; }
+  .ec.high { border-color:#5a2233; box-shadow:inset 3px 0 0 var(--bad); }
+  .ec.medium { box-shadow:inset 3px 0 0 var(--warn); }
+  .ec.low { box-shadow:inset 3px 0 0 var(--dim); }
+  .ec .name { font:13px ui-monospace,Menlo,monospace; color:var(--txt); font-weight:600; }
+  .ec .metrics { display:flex; gap:14px; margin:8px 0; font-size:12px; }
+  .ec .metrics b { font-size:15px; display:block; }
+  .risk { font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:1px; padding:2px 8px; border-radius:20px; }
+  .risk.high { background:#3d1420; color:var(--bad); } .risk.medium { background:#3a2d10; color:var(--warn); }
+  .risk.low { background:#1c2333; color:var(--dim); }
+  .chip { display:inline-block; padding:1px 8px; border-radius:5px; font-size:10.5px; font-weight:600; background:#182034; color:var(--dim); margin:2px 3px 0 0; }
+  .chip.tool { color:var(--info); } .chip.sens { color:var(--bad); background:#241019; }
+  .flow { font-size:11.5px; margin-top:7px; color:var(--dim); }
+  .flow .arrow { color:var(--dim); }
+  .mtable { width:100%; border-collapse:collapse; margin-top:9px; }
+  .mtable th { text-align:left; color:var(--dim); font-size:10px; text-transform:uppercase; letter-spacing:.6px; padding:3px 6px; }
+  .mtable td { padding:5px 6px; border-top:1px solid var(--line); font-size:12px; vertical-align:top; }
+  .pill { display:inline-block; padding:1px 9px; border-radius:20px; font-size:10.5px; font-weight:600; }
+  .running{background:#12351f;color:var(--ok)} .finished{background:#1c2333;color:var(--dim)}
+  .paused,.warned{background:#3a2d10;color:var(--warn)} .escalated,.killed{background:#3d1420;color:var(--bad)}
+  /* reconciliation */
+  .recon { display:grid; grid-template-columns:auto 1fr; gap:6px 14px; font-size:12.5px; align-items:center; }
+  .recon .k { color:var(--dim); }
+  .cbar { height:9px; background:var(--line); border-radius:4px; overflow:hidden; display:flex; }
+  .cbar i { display:block; height:100%; }
+  .empty { color:var(--dim); padding:26px; text-align:center; border:1px dashed var(--line); border-radius:10px; }
+  .callout { border:1px solid var(--line); border-left:4px solid var(--info); border-radius:0 10px 10px 0; background:#101827; padding:12px 15px; margin-bottom:16px; font-size:13px; color:#cdd3e0; }
+</style>
+</head>
+<body>
+<div class="top">
+  <h1><span class="shield">⬡</span> Guardian <span style="color:var(--dim);font-weight:400">— runtime subagents</span></h1>
+  <span class="live"><span id="dot" class="dot"></span><span id="upd">connecting…</span></span>
+</div>
+<div class="sub">Agents an LLM orchestrator spun up <b>at runtime</b> that belong to <b>no declared cluster</b> — the org chart never drew them. Guardian stitches them from the trace, groups them into discovered <b>emergent clusters</b> by what tools they call, and flags any that reach a <b>sensitive cluster</b> (e.g. payments).</div>
+
+<div class="nav">
+  <a href="/">⬡ Fleet</a>
+  <a class="active" href="/runtime">⧉ Runtime subagents</a>
+</div>
+
+<div id="kpis"></div>
+<div id="callout"></div>
+<div id="body"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => (s==null?'':s.toString()).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtCost = v => '$'+(v||0).toFixed(v>=1?2:4);
+const CLC = {ingestion:'#5aa7ff', extraction:'#2dd4a7', validation:'#b58aff', payments:'#f4587a', reporting:'#f5b23e'};
+const cColor = c => CLC[c] || '#7c8bb0';
+
+async function load(){
+  let d;
+  try { d = await (await fetch('/v1/runtime')).json(); }
+  catch(e){ $('upd').textContent='fetch error'; return; }
+  render(d);
+  $('upd').textContent = 'updated ' + new Date().toLocaleTimeString();
+}
+
+function render(d){
+  const t = d.totals||{};
+  $('kpis').innerHTML = `
+    <div class="kpi"><div class="v">${t.runtime_agents||0}</div><div class="l">runtime subagents</div></div>
+    <div class="kpi"><div class="v">${t.emergent_clusters||0}</div><div class="l">emergent clusters</div></div>
+    <div class="kpi"><div class="v cost">${fmtCost(t.cost_usd)}</div><div class="l">spend off the org chart</div></div>
+    <div class="kpi"><div class="v" style="color:${t.sensitive_touches?'var(--bad)':'var(--txt)'}">${t.sensitive_touches||0}</div><div class="l">reached a sensitive cluster</div></div>`;
+
+  $('callout').innerHTML = (t.sensitive_touches>0)
+    ? `<div class="callout" style="border-left-color:var(--bad)">⚠ <b>${t.sensitive_touches}</b> emergent cluster(s) reached a sensitive cluster (payments-class) — undeclared runtime code touching money-movement. Review the high-risk cards below.</div>`
+    : (t.runtime_agents>0
+        ? `<div class="callout">Runtime subagents detected but none reached a sensitive cluster. They are tracked and flagged; assign the recurring ones to a declared cluster to formalize them.</div>`
+        : ``);
+
+  const swarms = d.swarms||[];
+  if(!swarms.length){
+    $('body').innerHTML = `<div class="empty">No runtime subagents yet.<br><span class="mono" style="font-size:12px">Run <b>python demo/runtime.py</b> — an extraction agent spins up off-chart helpers, and one reaches payments.</span></div>`;
+    return;
+  }
+  $('body').innerHTML = swarms.map(renderSwarm).join('');
+}
+
+function renderSwarm(s){
+  const ec = (s.emergent_clusters||[]).map(renderEC).join('');
+  return `<div class="swarmhdr">
+      <h2>swarm <span class="mono">${esc(s.swarm_id)}</span></h2>
+      <span class="muted" style="font-size:12px">${s.runtime_agent_count} off-chart agent(s) · ${s.emergent_cluster_count} emergent cluster(s) · <span class="cost">${fmtCost(s.runtime_cost_usd)}</span> off-chart</span>
+    </div>
+    <div class="egrid">${ec || '<div class="empty">no runtime subagents in this swarm</div>'}</div>
+    ${renderRecon(s)}`;
+}
+
+function renderEC(g){
+  const tools = (g.tools||[]).map(x=>`<span class="chip tool">${esc(x)}</span>`).join('') || '<span class="muted">no tools recorded</span>';
+  const invokes = (g.invokes||[]).length
+    ? (g.invokes||[]).map(c=>{
+        const sens = (g.touches_sensitive||[]).includes(c);
+        return `<span class="chip ${sens?'sens':''}" style="color:${sens?'var(--bad)':cColor(c)}">${sens?'⚠ ':''}${esc(c)}</span>`;
+      }).join('')
+    : '<span class="muted">nothing (leaf)</span>';
+  const rows = (g.members||[]).map(m=>{
+    const from = (m.invoked_by||[]).map(c=>`<span class="chip" style="color:${cColor(c)}">${esc(c)}</span>`).join('') || '<span class="muted">root</span>';
+    const mtools = (m.tools||[]).map(x=>`<span class="chip tool">${esc(x)}</span>`).join('') || '<span class="muted">—</span>';
+    const sens = (m.touches_sensitive||[]).length ? ` <span class="risk high">→ ${m.touches_sensitive.map(esc).join(', ')}</span>` : '';
+    return `<tr>
+      <td class="mono"><a href="/agent?agent_id=${encodeURIComponent(m.agent_id)}">${esc(m.agent_id)}</a> <span class="pill ${m.state}">${esc(m.state)}</span>${sens}</td>
+      <td>${from}</td>
+      <td class="mono cost">${fmtCost(m.cost_usd)}</td>
+      <td class="mono muted">${m.runs}</td></tr>`;
+  }).join('');
+  return `<div class="ec ${g.risk}">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span class="name">⧉ ${esc(g.name)}</span>
+      <span class="risk ${g.risk}" style="margin-left:auto">${g.risk} risk</span>
+    </div>
+    <div class="metrics">
+      <span><b>${g.agent_count}</b><span class="muted">agents</span></span>
+      <span><b class="cost">${fmtCost(g.cost_usd)}</b><span class="muted">cost</span></span>
+      <span><b>${g.task_count}</b><span class="muted">tasks</span></span>
+      <span><b>${g.runs}</b><span class="muted">runs</span></span>
+    </div>
+    <div class="muted" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.6px">fingerprint (tools it calls)</div>
+    <div style="margin-top:3px">${tools}</div>
+    <div class="flow"><span class="arrow">reaches into ⟶</span> ${invokes}</div>
+    <table class="mtable"><thead><tr><th>agent</th><th>invoked by</th><th>cost</th><th>runs</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+  </div>`;
+}
+
+function renderRecon(s){
+  const declared = s.declared_clusters||[], realized = s.realized_declared||[], dead = s.dead_clusters||[];
+  const covered = declared.length ? realized.length/declared.length*100 : 0;
+  const declaredChips = declared.map(c=>{
+    const isDead = dead.includes(c), isSens = (s.sensitive_clusters||[]).includes(c);
+    return `<span class="chip" style="color:${isDead?'var(--dim)':cColor(c)};opacity:${isDead?0.55:1};${isDead?'text-decoration:line-through':''}">${isSens?'🔒 ':''}${esc(c)}</span>`;
+  }).join('');
+  return `<div class="card" style="margin-top:12px"><h2>Declared vs realized — org chart coverage</h2>
+    <div class="recon">
+      <div class="k">declared clusters</div><div>${declaredChips||'<span class="muted">none</span>'}</div>
+      <div class="k">realized (touched)</div>
+      <div><div class="cbar"><i style="width:${covered}%;background:var(--ok)"></i><i style="width:${100-covered}%;background:var(--line)"></i></div>
+           <span class="muted" style="font-size:11px">${realized.length}/${declared.length} declared clusters were used at runtime</span></div>
+      <div class="k">dead clusters</div><div>${dead.length? dead.map(c=>`<span class="chip" style="color:var(--dim)">${esc(c)}</span>`).join('') : '<span class="muted">none — every declared cluster was used</span>'}</div>
+    </div>
+    <p class="muted" style="font-size:11px;margin-top:9px">🔒 = sensitive (gated) cluster · struck-through = declared but never realized · emergent clusters above are the inverse: realized but never declared.</p>
+  </div>`;
+}
+
+// ---- realtime: SSE + poll ----
+let reloadTimer=null;
+function scheduleReload(){ if(reloadTimer) return; reloadTimer=setTimeout(()=>{reloadTimer=null; load();}, 500); }
+function connectSSE(){
+  const es=new EventSource('/v1/stream');
+  es.onopen=()=>{ $('upd').textContent='live'; };
+  es.onmessage=m=>{ let msg; try{ msg=JSON.parse(m.data);}catch(e){return;}
+    if(['task','run','registry','incident'].includes(msg.kind)) scheduleReload(); };
+  es.onerror=()=>{ $('upd').textContent='reconnecting…'; };
+}
+load(); connectSSE(); setInterval(load, 4000);
+</script>
+</body>
+</html>

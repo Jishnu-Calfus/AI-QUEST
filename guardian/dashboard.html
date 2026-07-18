@@ -42,11 +42,23 @@
   #totals { display:flex; gap:22px; margin-bottom:14px; }
   .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 18px; flex:1; }
   .kpi .v { font-size:22px; font-weight:700; } .kpi .l { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:1px; }
+  .nav { display:flex; gap:6px; margin:0 0 16px; }
+  .nav a { color:var(--dim); text-decoration:none; font-size:12px; font-weight:600; padding:6px 14px;
+           border:1px solid var(--line); border-radius:8px; letter-spacing:.3px; }
+  .nav a:hover { border-color:var(--info); color:var(--txt); }
+  .nav a.active { background:var(--card); color:var(--txt); border-color:var(--info); }
+  .nav a .n { display:inline-block; min-width:15px; text-align:center; margin-left:5px; padding:0 5px;
+              border-radius:9px; background:#233; color:var(--bad); font-size:10px; }
 </style>
 </head>
 <body>
 <h1><span class="shield">⬡</span> Guardian <span style="color:var(--dim);font-weight:400">— runtime watchdog for AI agents</span></h1>
 <div class="sub">every agent step inspected · deterministic rules + LLM judge · warn → pause → kill → human</div>
+
+<div class="nav">
+  <a class="active" href="/">⬡ Fleet</a>
+  <a href="/runtime" title="agents the LLM spun up at runtime, off the declared org chart">⧉ Runtime subagents<span class="n" id="nav-rt" style="display:none">0</span></a>
+</div>
 
 <div id="totals">
   <div class="kpi"><div class="v" id="k-agents">0</div><div class="l">agents watched</div></div>
@@ -215,6 +227,20 @@ async function renderSwarms(){
   }catch(e){}
 }
 setInterval(renderSwarms, 4000); renderSwarms();
+
+// ---- runtime-subagents tab badge (off-chart agents discovered at runtime) ----
+async function renderRuntimeBadge(){
+  try{
+    const rt = await (await fetch('/v1/runtime')).json();
+    const n = rt.totals?.runtime_agents || 0, sens = rt.totals?.sensitive_touches || 0;
+    const b = $('nav-rt');
+    if(n>0){ b.style.display='inline-block'; b.textContent = n;
+             b.style.background = sens>0 ? '#3d1420' : '#233';
+             b.style.color = sens>0 ? 'var(--bad)' : 'var(--warn)'; }
+    else { b.style.display='none'; }
+  }catch(e){}
+}
+setInterval(renderRuntimeBadge, 4000); renderRuntimeBadge();
 </script>
 </body>
 </html>

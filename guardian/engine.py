@@ -427,6 +427,171 @@ class Engine:
         out = [self._cluster_rollup(s, c) for (s, c) in self._cluster_keys()]
         return sorted(out, key=lambda x: -x["cost_usd"])
 
+    # ---------- runtime-subagent tracking (declared vs REALIZED clusters) ----------
+
+    def _sensitive_clusters(self, swarm_id: str) -> set:
+        """Declared clusters that are 'gated' — the risky ones for an undeclared
+        runtime agent to reach: any denied-edge target, or any cluster that
+        requires a predecessor (e.g. payments). Reaching one from off-chart code
+        is the high-risk emergent case."""
+        top = settings.topology_for(swarm_id)
+        s = {t for (_f, t) in top.denied_edges}
+        s |= set(top.required_predecessors.keys())
+        return s
+
+    def runtime_summary(self) -> dict:
+        """Runtime-subagent tracking — the declared-vs-REALIZED cluster view.
+
+        An LLM orchestrator spins up agents at runtime that were never declared
+        on any cluster in a swarm that HAS an org chart. Guardian sees them in
+        the event stream (via context propagation) but they belong to no cluster.
+        This groups those undeclared agents into discovered ('emergent') clusters
+        by behavioural fingerprint (the set of tools/models they call), flags the
+        ones that reach a sensitive cluster, and reconciles declared vs realized.
+        """
+        swarm_ids = sorted({r.swarm_id for r in self.runs.values()})
+        swarms_out: list[dict] = []
+        tot = {"runtime_agents": 0, "emergent_clusters": 0, "cost_usd": 0.0,
+               "sensitive_touches": 0, "swarms": 0}
+
+        for swarm_id in swarm_ids:
+            declared = settings.clusters_for(swarm_id)
+            if not declared:
+                continue                    # no org chart => nothing to be outside of
+            sensitive = self._sensitive_clusters(swarm_id)
+            runs_here = [r for r in self.runs.values() if r.swarm_id == swarm_id]
+            run_agent = {r.run_id: r.agent_id for r in runs_here}
+
+            # --- aggregate undeclared (off-chart) agents ---
+            agents: dict[str, dict] = {}
+            for r in runs_here:
+                if self._norm_cluster(r.cluster) != "(unassigned)":
+                    continue
+                a = agents.setdefault(r.agent_id, {
+                    "agent_id": r.agent_id, "cost_usd": 0.0, "runs": 0,
+                    "tasks": set(), "states": set(), "goal": "",
+                    "invoked_by": set(), "invokes": set(), "invoked": False,
+                    "touches_sensitive": set(), "_toolset": set()})
+                a["cost_usd"] = round(a["cost_usd"] + r.cost_usd, 6)
+                a["runs"] += 1
+                if r.task_id:
+                    a["tasks"].add(r.task_id)
+                a["states"].add(r.state.value)
+                a.setdefault("_tools_only", set())
+                if r.goal and not a["goal"]:
+                    a["goal"] = r.goal
+
+            # --- edges: attribute who-invokes-whom to the off-chart agents ---
+            for t in self.tasks.values():
+                if t.swarm_id != swarm_id:
+                    continue
+                for e in t.edges:
+                    fa, ta = run_agent.get(e.get("from")), run_agent.get(e.get("to"))
+                    fc, tc = e.get("from_cluster"), e.get("to_cluster")
+                    if ta in agents:                    # off-chart child = invoked at runtime
+                        agents[ta]["invoked"] = True
+                        if fc:
+                            agents[ta]["invoked_by"].add(fc)
+                    if fa in agents:                    # off-chart parent reaching into a cluster
+                        if tc:
+                            agents[fa]["invokes"].add(tc)
+                        if tc in sensitive:
+                            agents[fa]["touches_sensitive"].add(tc)
+
+            # --- behavioural fingerprint per off-chart agent (from its trace) ---
+            # _toolset = full signature (tools ∪ models) used for GROUPING;
+            # _tools_only = tool names, preferred for NAMING (models make poor
+            # cluster labels — nearly every emergent group calls an LLM).
+            for aid, a in agents.items():
+                for ev in self.store.events_by_agent(aid, 400):
+                    if ev.name and ev.type in (EventType.tool_call, EventType.llm_call):
+                        a["_toolset"].add(ev.name)
+                        if ev.type == EventType.tool_call:
+                            a["_tools_only"].add(ev.name)
+
+            # --- greedy-group off-chart agents into emergent clusters ---
+            groups: list[dict] = []
+            for a in sorted(agents.values(), key=lambda x: -x["cost_usd"]):
+                ts = a["_toolset"]
+                placed = None
+                for g in groups:
+                    if (ts and _jaccard(ts, g["_rep"]) >= 0.5) or (ts and ts <= g["_rep"]):
+                        placed = g
+                        break
+                if placed is None:
+                    placed = {"members": [], "_rep": set(),
+                              "_toolcount": {}, "_allcount": {}}
+                    groups.append(placed)
+                placed["members"].append(a)
+                placed["_rep"] |= ts
+                for tname in a["_tools_only"]:
+                    placed["_toolcount"][tname] = placed["_toolcount"].get(tname, 0) + 1
+                for tname in ts:
+                    placed["_allcount"][tname] = placed["_allcount"].get(tname, 0) + 1
+
+            emergent: list[dict] = []
+            for i, g in enumerate(groups):
+                mem = g["members"]
+                pool = g["_toolcount"] or g["_allcount"]   # prefer real tools
+                top_tool = max(pool, key=pool.get) if pool else ""
+                name = f"runtime:{top_tool}" if top_tool else f"runtime:group{i + 1}"
+                cost = round(sum(m["cost_usd"] for m in mem), 6)
+                runs = sum(m["runs"] for m in mem)
+                tasks_u: set = set().union(*(m["tasks"] for m in mem)) if mem else set()
+                invokes: set = set().union(*(m["invokes"] for m in mem)) if mem else set()
+                sens: set = set().union(*(m["touches_sensitive"] for m in mem)) if mem else set()
+                invoked_any = any(m["invoked"] for m in mem)
+                emergent.append({
+                    "name": name, "swarm_id": swarm_id,
+                    "agent_count": len(mem), "cost_usd": cost, "runs": runs,
+                    "task_count": len(tasks_u), "tools": sorted(g["_rep"]),
+                    "invokes": sorted(invokes), "invoked": invoked_any,
+                    "touches_sensitive": sorted(sens),
+                    "risk": ("high" if sens else "medium" if invoked_any else "low"),
+                    "members": [{
+                        "agent_id": m["agent_id"], "cost_usd": m["cost_usd"],
+                        "runs": m["runs"], "task_count": len(m["tasks"]),
+                        "tools": sorted(m["_toolset"]),
+                        "invoked_by": sorted(m["invoked_by"]),
+                        "invokes": sorted(m["invokes"]),
+                        "touches_sensitive": sorted(m["touches_sensitive"]),
+                        "state": ("running" if "running" in m["states"]
+                                  else next(iter(m["states"]), "finished")),
+                        "goal": m["goal"],
+                    } for m in sorted(mem, key=lambda x: -x["cost_usd"])],
+                })
+            _rank = {"high": 0, "medium": 1, "low": 2}
+            emergent.sort(key=lambda g: (_rank[g["risk"]], -g["cost_usd"]))
+
+            # --- declared vs realized reconciliation ---
+            realized: set = set()
+            for t in self.tasks.values():
+                if t.swarm_id == swarm_id:
+                    realized |= set(t.clusters)
+            dead = [c for c in declared if c not in realized]
+
+            rt_cost = round(sum(a["cost_usd"] for a in agents.values()), 6)
+            n_sens = sum(1 for g in emergent if g["touches_sensitive"])
+            tot["runtime_agents"] += len(agents)
+            tot["emergent_clusters"] += len(emergent)
+            tot["cost_usd"] = round(tot["cost_usd"] + rt_cost, 6)
+            tot["sensitive_touches"] += n_sens
+            swarms_out.append({
+                "swarm_id": swarm_id,
+                "declared_clusters": declared,
+                "realized_declared": [c for c in declared if c in realized],
+                "dead_clusters": dead,
+                "sensitive_clusters": sorted(sensitive),
+                "runtime_agent_count": len(agents),
+                "emergent_cluster_count": len(emergent),
+                "runtime_cost_usd": rt_cost,
+                "emergent_clusters": emergent,
+            })
+
+        swarms_out.sort(key=lambda s: -s["runtime_cost_usd"])
+        tot["swarms"] = len(swarms_out)
+        return {"totals": tot, "swarms": swarms_out}
+
     def _cluster_graph(self, swarm_id: str, focus: str) -> dict:
         """Cluster-topology graph: observed cluster→cluster invocations across all
         tasks in the swarm, plus declared clusters as nodes. Denied edges in red."""

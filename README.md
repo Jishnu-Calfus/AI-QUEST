@@ -27,6 +27,9 @@ python run_demo.py         # CONTROL: rogue agents get warned/paused/killed/esca
 python import_billing.py   # TRUE-UP: import simulated AWS bill, see metered-vs-actual
 python clusters.py         # TOPOLOGY: same swarm, differently-shaped tasks; one task
                            #   frozen mid-run for crossing a denied cluster boundary
+python runtime.py          # RUNTIME SUBAGENTS: extraction spins up off-chart helpers
+                           #   at runtime; Guardian discovers them as emergent clusters
+                           #   and flags the one that reaches payments (see /runtime tab)
 ```
 
 Demo order for the pitch: `swarm.py` first (cost story) → `import_billing.py` (reconciliation) → `run_demo.py` (enforcement theater) → click resume/kill on the dashboard (human-in-the-loop).
@@ -84,11 +87,12 @@ Group agents within a swarm into policy-bearing **clusters** (ingestion, extract
 | `GET /v1/tasks` · `GET /v1/tasks/{id}` | realized task list + per-task graph, cost-by-cluster, violations |
 | `POST /v1/tasks/{id}/action` | human decision on a whole task (resume/kill the frozen run) |
 | `GET /v1/clusters` | per-cluster cost + waste rollup |
+| `GET /v1/runtime` | runtime-subagent tracking: off-chart agents grouped into emergent clusters, risk-flagged, declared-vs-realized |
 | `GET /v1/runs/{id}/diagnose` | root-cause a failed run |
 | `POST /v1/billing/import` · `GET /v1/billing/reconciliation` | actual-bill true-up |
 | `POST /v1/runs/{id}/action` | human pause/resume/kill |
 | `GET /v1/runs` · `/v1/incidents` · `/v1/audit` · `/v1/stream` | state, incidents, audit, live SSE |
-| `GET /` · `/agent?agent_id=` · `/task?task_id=` | dashboard · per-agent page · per-task page |
+| `GET /` · `/agent?agent_id=` · `/task?task_id=` · `/runtime` | dashboard · per-agent · per-task · runtime-subagents tab |
 
 ## Repo map
 
@@ -99,10 +103,12 @@ guardian/        core: ingest → pricing → detectors → judge → actions �
   judge.py       pluggable LLM judge (Claude/OpenAI-compatible/offline mock)
   engine.py      suspicion ladder + swarm rollup + waste + TASK topology governance
   config.py      4-level policy resolution (default→swarm→cluster→agent) + topology
-  dashboard.html · agent.html · task.html   fleet · per-agent · per-task pages
+  engine.py      ... + runtime_summary(): discover/group/flag emergent clusters
+  dashboard.html · agent.html · task.html · cluster.html · runtime.html   UI pages
 sdk/             guardian_sdk.py — the ≤5-line client (+ context propagation)
 demo/            swarm.py (economics), run_demo.py (control), import_billing.py,
-                 clusters.py (sub-cluster topology governance)
+                 clusters.py (sub-cluster topology governance),
+                 runtime.py (runtime-subagent / emergent-cluster discovery)
 PITCH_PREP.md    everything the presenting team must know
 DESIGN.md        architecture, FR/NFR, learnings
 CLUSTERS_DESIGN.md  sub-cluster governance: declared vs realized, topology policy
